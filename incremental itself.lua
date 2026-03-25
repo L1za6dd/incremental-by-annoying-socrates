@@ -242,6 +242,8 @@ local omegaSkillTree = {
     { id = "o_absolute", name = "ABSOLUT", cost = 25000, parent = nil, effect = "x10000 EVERYTHING", x = 0.5, y = 0.93, parents = {"o_zenith_L", "o_zenith_R"} },
 }
 
+local TAB_COUNT = 9
+
 local state = {
     coins = 0, clickPower = 1, clickMultiplier = 1, autoUnlocked = false,
     running = true, currentTab = 1, rolling = false, titleIndex = 1,
@@ -269,12 +271,20 @@ local state = {
     astralShards = 0, omegaEnergy = 0,
     skillNodes = {}, omegaNodes = {},
     critActive = false, themeIndex = 1, minimized = false,
+    wood = 0, woodRebirths = 0, woodPrestige = 0,
+    woodUpgrades = {
+        axe = { level = 0, baseCost = 50, costMult = 2.5 },
+        sawmill = { level = 0, baseCost = 200, costMult = 3.0 },
+        forest = { level = 0, baseCost = 500, costMult = 3.5 },
+        roots = { level = 0, baseCost = 1000, costMult = 4.0 },
+        ironBark = { level = 0, baseCost = 5000, costMult = 5.0 },
+    },
 }
 
 for _, node in ipairs(astralSkillTree) do state.skillNodes[node.id] = false end
 for _, node in ipairs(omegaSkillTree) do state.omegaNodes[node.id] = false end
 
-local MIN_W, MIN_H = 320, 400
+local MIN_W, MIN_H = 340, 400
 local MAX_W, MAX_H = 800, 1000
 local RESIZE_HANDLE = 10
 local MIN_ZOOM, MAX_ZOOM = 0.3, 3.5
@@ -286,12 +296,13 @@ local astralZoom, astralPanX, astralPanY = 1.0, 0, 0
 local omegaZoom, omegaPanX, omegaPanY = 0.6, 0, 0
 
 local updateUI, rebuildAstralTree, rebuildOmegaTree
-local repositionTreeNodes
+local repositionTreeNodes, rebuildAllTabContent
 
 local btn, labels = {}, {}
 local allObjects, objectData = {}, {}
-local tabObjects = { {}, {}, {}, {}, {}, {}, {}, {} }
-local essObjs, voidObjs = {}, {}
+local tabObjects = {}
+for i = 1, TAB_COUNT do tabObjects[i] = {} end
+local essObjs, voidObjs, woodObjs = {}, {}, {}
 local astralObjs, omegaObjs = {}, {}
 local glowObjs, omegaGlowObjs = {}, {}
 local astralDrawings, omegaDrawings = {}, {}
@@ -314,65 +325,88 @@ local function T() return themes[state.themeIndex] end
 
 local function makeSquare(x, y, w, h, color, zi, tab)
     local s = Drawing.new("Square")
-    s.Position = Vector2.new(x, y); s.Size = Vector2.new(w, h)
-    s.Color = color; s.Filled = true; s.Visible = true; s.ZIndex = zi or 1; s.Transparency = 1
+    s.Position = Vector2.new(x, y)
+    s.Size = Vector2.new(w, h)
+    s.Color = color
+    s.Filled = true
+    s.Visible = true
+    s.ZIndex = zi or 1
+    s.Transparency = 1
     table.insert(allObjects, s)
-    table.insert(objectData, {obj = s, ox = x - px, oy = y - py, ow = w, oh = h})
+    table.insert(objectData, {obj = s, rx = (x - px) / pw, ry = (y - py) / ph, rw = w / pw, rh = h / ph, isSquare = true})
     if tab then table.insert(tabObjects[tab], s) end
     return s
 end
 
 local function makeText(x, y, str, sz, color, center, zi, tab)
     local t = Drawing.new("Text")
-    t.Position = Vector2.new(x, y); t.Text = str; t.Size = sz or 18
-    t.Color = color or Color3.fromRGB(255, 255, 255); t.Center = center or false
-    t.Outline = true; t.Visible = true; t.ZIndex = zi or 5; t.Transparency = 1
+    t.Position = Vector2.new(x, y)
+    t.Text = str
+    t.Size = sz or 18
+    t.Color = color or Color3.fromRGB(255, 255, 255)
+    t.Center = center or false
+    t.Outline = true
+    t.Visible = true
+    t.ZIndex = zi or 5
+    t.Transparency = 1
     table.insert(allObjects, t)
-    table.insert(objectData, {obj = t, ox = x - px, oy = y - py})
+    table.insert(objectData, {obj = t, rx = (x - px) / pw, ry = (y - py) / ph, baseSize = sz or 18})
     if tab then table.insert(tabObjects[tab], t) end
     return t
 end
 
 local function makeLine(x1, y1, x2, y2, color, thickness, zi, tab)
     local l = Drawing.new("Line")
-    l.From = Vector2.new(x1, y1); l.To = Vector2.new(x2, y2)
-    l.Color = color; l.Thickness = thickness or 2; l.Visible = true; l.ZIndex = zi or 2; l.Transparency = 1
+    l.From = Vector2.new(x1, y1)
+    l.To = Vector2.new(x2, y2)
+    l.Color = color
+    l.Thickness = thickness or 2
+    l.Visible = true
+    l.ZIndex = zi or 2
+    l.Transparency = 1
     table.insert(allObjects, l)
-    table.insert(objectData, {obj = l, ox1 = x1 - px, oy1 = y1 - py, ox2 = x2 - px, oy2 = y2 - py, isLine = true})
+    table.insert(objectData, {obj = l, rx1 = (x1 - px) / pw, ry1 = (y1 - py) / ph, rx2 = (x2 - px) / pw, ry2 = (y2 - py) / ph, isLine = true})
     if tab then table.insert(tabObjects[tab], l) end
     return l
 end
 
 local function makeCircle(x, y, radius, color, zi, tab)
     local c = Drawing.new("Circle")
-    c.Position = Vector2.new(x, y); c.Radius = radius
-    c.Color = color; c.Filled = true; c.Visible = true; c.ZIndex = zi or 1
-    c.Transparency = 0.3; c.NumSides = 24
+    c.Position = Vector2.new(x, y)
+    c.Radius = radius
+    c.Color = color
+    c.Filled = true
+    c.Visible = true
+    c.ZIndex = zi or 1
+    c.Transparency = 0.3
+    c.NumSides = 24
     table.insert(allObjects, c)
-    table.insert(objectData, {obj = c, ox = x - px, oy = y - py, isCircle = true})
+    table.insert(objectData, {obj = c, rx = (x - px) / pw, ry = (y - py) / ph, isCircle = true, baseRadius = radius})
     if tab then table.insert(tabObjects[tab], c) end
     return c
 end
 
 local function regBtn(name, x, y, w, h)
-    btn[name] = {x = x, y = y, w = w, h = h, ox = x - px, oy = y - py}
+    btn[name] = {x = x, y = y, w = w, h = h, rx = (x - px) / pw, ry = (y - py) / ph, rw = w / pw, rh = h / ph}
 end
 
 local function hit(mx, my, b) return b and mx >= b.x and mx <= b.x + b.w and my >= b.y and my <= b.y + b.h end
 local function hitXY(mx, my, x, y, w, h) return mx >= x and mx <= x + w and my >= y and my <= y + h end
 
 local function getTreeArea()
-    return px + 5, py + (contentY and (contentY - py) or 78) + TREE_HEADER_H, pw - 10, ph - (contentY and (contentY - py) or 78) - TREE_HEADER_H - TREE_FOOTER_H - 28
+    local contentYOff = 78
+    return px + 5, py + contentYOff + TREE_HEADER_H, pw - 10, ph - contentYOff - TREE_HEADER_H - TREE_FOOTER_H - 28
 end
 
 local function switchTab(tabNum)
     if state.minimized then return end
     state.currentTab = tabNum
-    for i = 1, 8 do
+    for i = 1, TAB_COUNT do
         for _, obj in ipairs(tabObjects[i]) do obj.Visible = (i == tabNum) end
     end
     for _, obj in ipairs(essObjs) do obj.Visible = (tabNum == 4 and state.tier >= 1) end
     for _, obj in ipairs(voidObjs) do obj.Visible = (tabNum == 6 and state.tier >= 2) end
+    for _, obj in ipairs(woodObjs) do obj.Visible = (tabNum == 9 and state.tier >= 5) end
     local astralVis = (tabNum == 7 and state.tier >= 3)
     for _, obj in ipairs(astralObjs) do obj.Visible = astralVis end
     for _, g in ipairs(glowObjs) do g.Visible = astralVis end
@@ -391,18 +425,31 @@ local function switchTab(tabNum)
     if labels.omegaLocked then labels.omegaLocked.Visible = (tabNum == 8 and state.tier < 4) end
     if labels.omegaLocked2 then labels.omegaLocked2.Visible = (tabNum == 8 and state.tier < 4) end
     if labels.omegaLocked3 then labels.omegaLocked3.Visible = (tabNum == 8 and state.tier < 4) end
+    if labels.woodLocked then labels.woodLocked.Visible = (tabNum == 9 and state.tier < 5) end
+    if labels.woodLocked2 then labels.woodLocked2.Visible = (tabNum == 9 and state.tier < 5) end
+    if labels.woodLocked3 then labels.woodLocked3.Visible = (tabNum == 9 and state.tier < 5) end
 end
 
 local function repositionAll()
     for _, d in ipairs(objectData) do
         if d.isLine then
-            d.obj.From = Vector2.new(px + d.ox1, py + d.oy1)
-            d.obj.To = Vector2.new(px + d.ox2, py + d.oy2)
+            d.obj.From = Vector2.new(px + d.rx1 * pw, py + d.ry1 * ph)
+            d.obj.To = Vector2.new(px + d.rx2 * pw, py + d.ry2 * ph)
+        elseif d.isSquare then
+            d.obj.Position = Vector2.new(px + d.rx * pw, py + d.ry * ph)
+            d.obj.Size = Vector2.new(d.rw * pw, d.rh * ph)
+        elseif d.isCircle then
+            d.obj.Position = Vector2.new(px + d.rx * pw, py + d.ry * ph)
         else
-            d.obj.Position = Vector2.new(px + d.ox, py + d.oy)
+            d.obj.Position = Vector2.new(px + d.rx * pw, py + d.ry * ph)
         end
     end
-    for _, b in pairs(btn) do b.x = px + b.ox; b.y = py + b.oy end
+    for _, b in pairs(btn) do
+        b.x = px + b.rx * pw
+        b.y = py + b.ry * ph
+        b.w = b.rw * pw
+        b.h = b.rh * ph
+    end
 end
 
 repositionTreeNodes = function(tree, labelPrefix, zoom, panX, panY)
@@ -446,9 +493,14 @@ repositionTreeNodes = function(tree, labelPrefix, zoom, panX, panY)
         local pos = nodePositions[node.id]
         local bk = labelPrefix .. "node_" .. node.id
         if btn[bk] then
-            btn[bk].x = pos.x; btn[bk].y = pos.y
-            btn[bk].ox = pos.x - px; btn[bk].oy = pos.y - py
-            btn[bk].w = nodeW; btn[bk].h = nodeH
+            btn[bk].x = pos.x
+            btn[bk].y = pos.y
+            btn[bk].rx = (pos.x - px) / pw
+            btn[bk].ry = (pos.y - py) / ph
+            btn[bk].w = nodeW
+            btn[bk].h = nodeH
+            btn[bk].rw = nodeW / pw
+            btn[bk].rh = nodeH / ph
         end
         if labels[labelPrefix .. "nodeGlow_" .. node.id] then
             labels[labelPrefix .. "nodeGlow_" .. node.id].Position = Vector2.new(pos.cx, pos.cy)
@@ -473,43 +525,6 @@ end
 local function resizeUI(newW, newH)
     pw = math.clamp(newW, MIN_W, MAX_W)
     ph = math.clamp(newH, MIN_H, MAX_H)
-    if labels.bodyBg then labels.bodyBg.Size = Vector2.new(pw, ph) end
-    if labels.headerBg then labels.headerBg.Size = Vector2.new(pw, 42) end
-    for _, d in ipairs(objectData) do
-        if d.obj == labels.headerTitle then d.ox = pw / 2 end
-        if d.obj == labels.closeBg then d.ox = pw - 38; d.oy = 6 end
-        if d.obj == labels.minBg then d.ox = pw - 72; d.oy = 6 end
-        if d.obj == labels.minBtnText then d.ox = pw - 72 + 15; d.oy = 13 end
-    end
-    if btn.close then btn.close.ox = pw - 38; btn.close.oy = 6 end
-    if btn.minimize then btn.minimize.ox = pw - 72; btn.minimize.oy = 6 end
-    local tw = math.floor(pw / 8)
-    local ltw = pw - tw * 7
-    for i = 1, 8 do
-        local w = (i == 8) and ltw or tw
-        local x = tw * (i - 1)
-        if btn["tab" .. i] then btn["tab" .. i].ox = x; btn["tab" .. i].oy = 44; btn["tab" .. i].w = w end
-        if labels["tab" .. i .. "Bg"] then
-            for _, d in ipairs(objectData) do if d.obj == labels["tab" .. i .. "Bg"] then d.ox = x; d.oy = 44; break end end
-            labels["tab" .. i .. "Bg"].Size = Vector2.new(w, 32)
-        end
-        if labels["tab" .. i .. "L"] then
-            for _, d in ipairs(objectData) do if d.obj == labels["tab" .. i .. "L"] then d.ox = x + w / 2; d.oy = 54; break end end
-        end
-    end
-    if labels.footerBg then
-        for _, d in ipairs(objectData) do if d.obj == labels.footerBg then d.oy = ph - 28; break end end
-        labels.footerBg.Size = Vector2.new(pw, 28)
-    end
-    if labels.footerText then
-        for _, d in ipairs(objectData) do if d.obj == labels.footerText then d.ox = pw / 2; d.oy = ph - 22; break end end
-    end
-    if labels.resizeC then
-        for _, d in ipairs(objectData) do if d.obj == labels.resizeC then d.ox = pw - RESIZE_HANDLE; d.oy = ph - RESIZE_HANDLE; break end end
-    end
-    if labels.resizeGrip then
-        for _, d in ipairs(objectData) do if d.obj == labels.resizeGrip then d.ox = pw - 14; d.oy = ph - 14; break end end
-    end
     repositionAll()
     if rebuildAstralTree then rebuildAstralTree() end
     if rebuildOmegaTree then rebuildOmegaTree() end
@@ -518,14 +533,15 @@ end
 local function toggleMinimize()
     state.minimized = not state.minimized
     if state.minimized then
-        for i = 1, 8 do for _, obj in ipairs(tabObjects[i]) do obj.Visible = false end end
+        for i = 1, TAB_COUNT do for _, obj in ipairs(tabObjects[i]) do obj.Visible = false end end
         for _, obj in ipairs(essObjs) do obj.Visible = false end
         for _, obj in ipairs(voidObjs) do obj.Visible = false end
+        for _, obj in ipairs(woodObjs) do obj.Visible = false end
         for _, obj in ipairs(astralObjs) do obj.Visible = false end
         for _, obj in ipairs(omegaObjs) do obj.Visible = false end
         for _, g in ipairs(glowObjs) do g.Visible = false end
         for _, g in ipairs(omegaGlowObjs) do g.Visible = false end
-        for i = 1, 8 do
+        for i = 1, TAB_COUNT do
             if labels["tab" .. i .. "Bg"] then labels["tab" .. i .. "Bg"].Visible = false end
             if labels["tab" .. i .. "L"] then labels["tab" .. i .. "L"].Visible = false end
         end
@@ -534,12 +550,12 @@ local function toggleMinimize()
         if labels.footerText then labels.footerText.Visible = false end
         if labels.resizeC then labels.resizeC.Visible = false end
         if labels.resizeGrip then labels.resizeGrip.Visible = false end
-        local lockedLabels = {"essLocked","essLocked2","essLocked3","voidLocked","voidLocked2","voidLocked3","astralLocked","astralLocked2","astralLocked3","omegaLocked","omegaLocked2","omegaLocked3"}
+        local lockedLabels = {"essLocked","essLocked2","essLocked3","voidLocked","voidLocked2","voidLocked3","astralLocked","astralLocked2","astralLocked3","omegaLocked","omegaLocked2","omegaLocked3","woodLocked","woodLocked2","woodLocked3"}
         for _, k in ipairs(lockedLabels) do if labels[k] then labels[k].Visible = false end end
         labels.minBtnText.Text = "+"
     else
         if labels.bodyBg then labels.bodyBg.Visible = true end
-        for i = 1, 8 do
+        for i = 1, TAB_COUNT do
             if labels["tab" .. i .. "Bg"] then labels["tab" .. i .. "Bg"].Visible = true end
             if labels["tab" .. i .. "L"] then labels["tab" .. i .. "L"].Visible = true end
         end
@@ -559,27 +575,27 @@ makeText(px + 10, py + 15, "::::", 14, Color3.fromRGB(80, 80, 120), false, 6)
 
 regBtn("close", px + pw - 38, py + 6, 30, 30)
 labels.closeBg = makeSquare(btn.close.x, btn.close.y, 30, 30, T().closeBtn, 3)
-makeText(btn.close.x + 15, btn.close.y + 7, "X", 18, Color3.fromRGB(255, 255, 255), true, 6)
+makeText(px + pw - 38 + 15, py + 6 + 7, "X", 18, Color3.fromRGB(255, 255, 255), true, 6)
 
 regBtn("minimize", px + pw - 72, py + 6, 30, 30)
 labels.minBg = makeSquare(btn.minimize.x, btn.minimize.y, 30, 30, Color3.fromRGB(60, 60, 100), 3)
-labels.minBtnText = makeText(btn.minimize.x + 15, btn.minimize.y + 7, "-", 18, Color3.fromRGB(255, 255, 255), true, 6)
+labels.minBtnText = makeText(px + pw - 72 + 15, py + 6 + 7, "-", 18, Color3.fromRGB(255, 255, 255), true, 6)
 
 labels.resizeC = makeSquare(px + pw - RESIZE_HANDLE, py + ph - RESIZE_HANDLE, RESIZE_HANDLE, RESIZE_HANDLE, T().resize, 3)
 labels.resizeC.Transparency = 0.4
 labels.resizeGrip = makeText(px + pw - 14, py + ph - 14, "◢", 12, T().resize, false, 7)
 
 local tabY = py + 44
-local tabW = math.floor(pw / 8)
-local lastTabW = pw - tabW * 7
-local tabNames = {"MAIN", "REBIRTH", "ROLL", "ESSENCE", "CONFIG", "VOID", "ASTRAL", "OMEGA"}
+local tabW = math.floor(pw / TAB_COUNT)
+local lastTabW = pw - tabW * (TAB_COUNT - 1)
+local tabNames = {"MAIN", "REBIRTH", "ROLL", "ESSENCE", "CONFIG", "VOID", "ASTRAL", "OMEGA", "LUMBER"}
 
-for i = 1, 8 do
-    local w = (i == 8) and lastTabW or tabW
+for i = 1, TAB_COUNT do
+    local w = (i == TAB_COUNT) and lastTabW or tabW
     local x = px + tabW * (i - 1)
     regBtn("tab" .. i, x, tabY, w, 32)
     labels["tab" .. i .. "Bg"] = makeSquare(x, tabY, w, 32, (i == 1) and T().tabActive or T().tabInactive, 3)
-    labels["tab" .. i .. "L"] = makeText(x + w / 2, tabY + 10, tabNames[i], 10, (i == 1) and T().tabTextActive or T().tabTextInactive, true, 6)
+    labels["tab" .. i .. "L"] = makeText(x + w / 2, tabY + 10, tabNames[i], 9, (i == 1) and T().tabTextActive or T().tabTextInactive, true, 6)
 end
 
 local contentY = tabY + 34
@@ -588,17 +604,25 @@ labels.footerText = makeText(px + pw / 2, py + ph - 22, "Made by a very annoying
 
 do
     local cY = contentY + 5
-    labels.coins = makeText(px+20,cY,"Coins: 0",22,T().coinText,false,5,1); cY=cY+28
-    labels.stats = makeText(px+20,cY,"Click: 1 | /Sec: 0",13,T().textDim,false,5,1); cY=cY+20
-    labels.mult = makeText(px+20,cY,"Total Mult: x1",12,Color3.fromRGB(140,140,200),false,5,1); cY=cY+18
-    labels.title = makeText(px+20,cY,"Title: None",12,Color3.fromRGB(140,140,140),false,5,1); cY=cY+20
-    makeSquare(px+15,cY,pw-30,1,T().separator,2,1); cY=cY+8
+    labels.coins = makeText(px+20,cY,"Coins: 0",22,T().coinText,false,5,1)
+    cY=cY+28
+    labels.stats = makeText(px+20,cY,"Click: 1 | /Sec: 0",13,T().textDim,false,5,1)
+    cY=cY+20
+    labels.mult = makeText(px+20,cY,"Total Mult: x1",12,Color3.fromRGB(140,140,200),false,5,1)
+    cY=cY+18
+    labels.title = makeText(px+20,cY,"Title: None",12,Color3.fromRGB(140,140,140),false,5,1)
+    cY=cY+20
+    makeSquare(px+15,cY,pw-30,1,T().separator,2,1)
+    cY=cY+8
     regBtn("click",px+30,cY,pw-60,70)
     labels.clickBg = makeSquare(btn.click.x,btn.click.y,pw-60,70,T().accent,2,1)
-    makeText(btn.click.x+(pw-60)/2,btn.click.y+14,">>> CLICK <<<",24,Color3.fromRGB(255,255,255),true,6,1)
-    labels.clickSub = makeText(btn.click.x+(pw-60)/2,btn.click.y+46,"+1 coins",14,Color3.fromRGB(210,255,210),true,6,1); cY=cY+80
-    makeSquare(px+15,cY,pw-30,1,T().separator,2,1); cY=cY+6
-    makeText(px+20,cY,"[ UPGRADES ]",16,Color3.fromRGB(160,160,255),false,5,1); cY=cY+24
+    makeText(px+pw/2,btn.click.y+14,">>> CLICK <<<",24,Color3.fromRGB(255,255,255),true,6,1)
+    labels.clickSub = makeText(px+pw/2,btn.click.y+46,"+1 coins",14,Color3.fromRGB(210,255,210),true,6,1)
+    cY=cY+80
+    makeSquare(px+15,cY,pw-30,1,T().separator,2,1)
+    cY=cY+6
+    makeText(px+20,cY,"[ UPGRADES ]",16,Color3.fromRGB(160,160,255),false,5,1)
+    cY=cY+24
     makeSquare(px+15,cY,pw-30,60,T().card,2,1)
     makeText(px+25,cY+4,"Click Power +1",14,Color3.fromRGB(255,200,80),false,5,1)
     labels.u1Info = makeText(px+25,cY+22,"Level: 0",12,T().textDim,false,5,1)
@@ -608,7 +632,8 @@ do
     makeText(btn.buy1.x+14,btn.buy1.y+7,"+1",14,Color3.fromRGB(255,255,255),true,6,1)
     regBtn("max1",px+pw-83,cY+16,58,28)
     labels.m1Bg = makeSquare(btn.max1.x,btn.max1.y,58,28,T().accentAlt,3,1)
-    labels.m1Text = makeText(btn.max1.x+29,btn.max1.y+7,"MAX",14,Color3.fromRGB(255,255,255),true,6,1); cY=cY+66
+    labels.m1Text = makeText(btn.max1.x+29,btn.max1.y+7,"MAX",14,Color3.fromRGB(255,255,255),true,6,1)
+    cY=cY+66
     makeSquare(px+15,cY,pw-30,60,T().card,2,1)
     labels.u2Title = makeText(px+25,cY+4,"Auto Clicker [UNLOCK]",14,Color3.fromRGB(80,200,255),false,5,1)
     labels.u2Info = makeText(px+25,cY+22,"Unlocks automatic clicking",12,T().textDim,false,5,1)
@@ -618,7 +643,8 @@ do
     labels.b2Text = makeText(btn.buy2.x+14,btn.buy2.y+7,"BUY",14,Color3.fromRGB(255,255,255),true,6,1)
     regBtn("max2",px+pw-83,cY+16,58,28)
     labels.m2Bg = makeSquare(btn.max2.x,btn.max2.y,58,28,Color3.fromRGB(30,30,30),3,1)
-    labels.m2Text = makeText(btn.max2.x+29,btn.max2.y+7,"MAX",14,Color3.fromRGB(80,80,80),true,6,1); cY=cY+66
+    labels.m2Text = makeText(btn.max2.x+29,btn.max2.y+7,"MAX",14,Color3.fromRGB(80,80,80),true,6,1)
+    cY=cY+66
     makeSquare(px+15,cY,pw-30,60,T().card,2,1)
     makeText(px+25,cY+4,"Click Multiplier x2",14,Color3.fromRGB(255,100,200),false,5,1)
     labels.u3Info = makeText(px+25,cY+22,"Level: 0 (x1)",12,T().textDim,false,5,1)
@@ -633,43 +659,64 @@ end
 
 do
     local rY = contentY + 5
-    makeText(px+20,rY,"[ REBIRTH ]",16,Color3.fromRGB(255,180,50),false,5,2); rY=rY+22
-    labels.rbStats = makeText(px+20,rY,"Rebirths: 0 | Tokens: 0",13,Color3.fromRGB(255,220,120),false,5,2); rY=rY+18
-    labels.rbMult = makeText(px+20,rY,"Rebirth Mult: x1.0",12,Color3.fromRGB(200,200,160),false,5,2); rY=rY+18
-    labels.rbReq = makeText(px+20,rY,"Need: 15K coins",12,T().textDim,false,5,2); rY=rY+20
+    makeText(px+20,rY,"[ REBIRTH ]",16,Color3.fromRGB(255,180,50),false,5,2)
+    rY=rY+22
+    labels.rbStats = makeText(px+20,rY,"Rebirths: 0 | Tokens: 0",13,Color3.fromRGB(255,220,120),false,5,2)
+    rY=rY+18
+    labels.rbMult = makeText(px+20,rY,"Rebirth Mult: x1.0",12,Color3.fromRGB(200,200,160),false,5,2)
+    rY=rY+18
+    labels.rbReq = makeText(px+20,rY,"Need: 15K coins",12,T().textDim,false,5,2)
+    rY=rY+20
     regBtn("rebirth",px+30,rY,pw-60,36)
     labels.rbBg = makeSquare(btn.rebirth.x,btn.rebirth.y,pw-60,36,Color3.fromRGB(180,120,30),3,2)
-    makeText(btn.rebirth.x+(pw-60)/2,btn.rebirth.y+9,"REBIRTH",18,Color3.fromRGB(255,255,255),true,6,2); rY=rY+44
-    makeSquare(px+15,rY,pw-30,1,T().separator,2,2); rY=rY+6
-    makeText(px+20,rY,"[ REBIRTH UPGRADES ]",13,Color3.fromRGB(255,200,100),false,5,2); rY=rY+20
+    makeText(btn.rebirth.x+(pw-60)/2,btn.rebirth.y+9,"REBIRTH",18,Color3.fromRGB(255,255,255),true,6,2)
+    rY=rY+44
+    makeSquare(px+15,rY,pw-30,1,T().separator,2,2)
+    rY=rY+6
+    makeText(px+20,rY,"[ REBIRTH UPGRADES ]",13,Color3.fromRGB(255,200,100),false,5,2)
+    rY=rY+20
     makeSquare(px+15,rY,pw-30,50,Color3.fromRGB(40,35,25),2,2)
     makeText(px+25,rY+4,"Starting Coins (+1,000)",12,Color3.fromRGB(255,220,100),false,5,2)
     labels.ru1Info = makeText(px+25,rY+19,"Lv: 0 (+0)",11,T().textDim,false,5,2)
     labels.ru1Cost = makeText(px+25,rY+34,"Cost: 1 Token",11,Color3.fromRGB(255,200,80),false,5,2)
     regBtn("rbuy1",px+pw-83,rY+12,58,26)
     labels.rb1Bg = makeSquare(btn.rbuy1.x,btn.rbuy1.y,58,26,Color3.fromRGB(150,100,20),3,2)
-    makeText(btn.rbuy1.x+29,btn.rbuy1.y+6,"BUY",15,Color3.fromRGB(255,255,255),true,6,2); rY=rY+56
+    makeText(btn.rbuy1.x+29,btn.rbuy1.y+6,"BUY",15,Color3.fromRGB(255,255,255),true,6,2)
+    rY=rY+56
     makeSquare(px+15,rY,pw-30,50,Color3.fromRGB(40,35,25),2,2)
     makeText(px+25,rY+4,"Permanent Click (+15)",12,Color3.fromRGB(255,180,80),false,5,2)
     labels.ru2Info = makeText(px+25,rY+19,"Lv: 0 (+0)",11,T().textDim,false,5,2)
     labels.ru2Cost = makeText(px+25,rY+34,"Cost: 2 Tokens",11,Color3.fromRGB(255,200,80),false,5,2)
     regBtn("rbuy2",px+pw-83,rY+12,58,26)
     labels.rb2Bg = makeSquare(btn.rbuy2.x,btn.rbuy2.y,58,26,Color3.fromRGB(150,100,20),3,2)
-    makeText(btn.rbuy2.x+29,btn.rbuy2.y+6,"BUY",15,Color3.fromRGB(255,255,255),true,6,2); rY=rY+58
-    makeSquare(px+15,rY,pw-30,1,T().separator,2,2); rY=rY+6
-    makeText(px+20,rY,"[ PRESTIGE ]",16,Color3.fromRGB(200,100,255),false,5,2); rY=rY+22
-    labels.prStats = makeText(px+20,rY,"Prestige: 0",13,Color3.fromRGB(220,160,255),false,5,2); rY=rY+18
-    labels.prMult = makeText(px+20,rY,"Prestige Mult: x1",12,Color3.fromRGB(200,160,220),false,5,2); rY=rY+18
-    labels.prReq = makeText(px+20,rY,"Need: 10 Rebirths",12,T().textDim,false,5,2); rY=rY+18
-    makeText(px+20,rY,"Resets rebirths & rebirth upgrades!",10,Color3.fromRGB(255,120,120),false,5,2); rY=rY+16
+    makeText(btn.rbuy2.x+29,btn.rbuy2.y+6,"BUY",15,Color3.fromRGB(255,255,255),true,6,2)
+    rY=rY+58
+    makeSquare(px+15,rY,pw-30,1,T().separator,2,2)
+    rY=rY+6
+    makeText(px+20,rY,"[ PRESTIGE ]",16,Color3.fromRGB(200,100,255),false,5,2)
+    rY=rY+22
+    labels.prStats = makeText(px+20,rY,"Prestige: 0",13,Color3.fromRGB(220,160,255),false,5,2)
+    rY=rY+18
+    labels.prMult = makeText(px+20,rY,"Prestige Mult: x1",12,Color3.fromRGB(200,160,220),false,5,2)
+    rY=rY+18
+    labels.prReq = makeText(px+20,rY,"Need: 10 Rebirths",12,T().textDim,false,5,2)
+    rY=rY+18
+    makeText(px+20,rY,"Resets rebirths & rebirth upgrades!",10,Color3.fromRGB(255,120,120),false,5,2)
+    rY=rY+16
     regBtn("prestige",px+30,rY,pw-60,36)
     labels.prBg = makeSquare(btn.prestige.x,btn.prestige.y,pw-60,36,Color3.fromRGB(130,50,200),3,2)
-    makeText(btn.prestige.x+(pw-60)/2,btn.prestige.y+9,"PRESTIGE",18,Color3.fromRGB(255,255,255),true,6,2); rY=rY+44
-    makeSquare(px+15,rY,pw-30,1,T().separator,2,2); rY=rY+6
-    makeText(px+20,rY,"[ TIER ]",16,Color3.fromRGB(255,100,100),false,5,2); rY=rY+22
-    labels.tierStats = makeText(px+20,rY,"Tier: 0 | Mult: x1",13,Color3.fromRGB(255,180,180),false,5,2); rY=rY+18
-    labels.tierReq = makeText(px+20,rY,"Need: 2 Prestiges",12,T().textDim,false,5,2); rY=rY+18
-    labels.tierDesc = makeText(px+20,rY,"Resets ALL (keeps title). Unlocks Essence.",11,Color3.fromRGB(255,120,120),false,5,2); rY=rY+18
+    makeText(btn.prestige.x+(pw-60)/2,btn.prestige.y+9,"PRESTIGE",18,Color3.fromRGB(255,255,255),true,6,2)
+    rY=rY+44
+    makeSquare(px+15,rY,pw-30,1,T().separator,2,2)
+    rY=rY+6
+    makeText(px+20,rY,"[ TIER ]",16,Color3.fromRGB(255,100,100),false,5,2)
+    rY=rY+22
+    labels.tierStats = makeText(px+20,rY,"Tier: 0 | Mult: x1",13,Color3.fromRGB(255,180,180),false,5,2)
+    rY=rY+18
+    labels.tierReq = makeText(px+20,rY,"Need: 2 Prestiges",12,T().textDim,false,5,2)
+    rY=rY+18
+    labels.tierDesc = makeText(px+20,rY,"Resets ALL (keeps title). Unlocks Essence.",11,Color3.fromRGB(255,120,120),false,5,2)
+    rY=rY+18
     regBtn("tier",px+30,rY,pw-60,36)
     labels.tierBg = makeSquare(btn.tier.x,btn.tier.y,pw-60,36,Color3.fromRGB(160,40,40),3,2)
     labels.tierBtnText = makeText(btn.tier.x+(pw-60)/2,btn.tier.y+9,"TIER UP",18,Color3.fromRGB(255,255,255),true,6,2)
@@ -677,37 +724,51 @@ end
 
 do
     local gY = contentY+5
-    makeText(px+20,gY,"[ TITLE ROULETTE ]",18,Color3.fromRGB(255,220,50),false,5,3); gY=gY+24
-    labels.rollModeLabel = makeText(px+20,gY,"Mode: Single Roll",12,Color3.fromRGB(180,180,200),false,5,3); gY=gY+16
-    makeText(px+20,gY,"Better titles won't be replaced!",11,Color3.fromRGB(140,255,140),false,5,3); gY=gY+18
-    makeText(px+20,gY,"Current Title:",14,Color3.fromRGB(200,200,220),false,5,3); gY=gY+20
-    labels.rollTitle = makeText(px+20,gY,"None",20,Color3.fromRGB(140,140,140),false,5,3); gY=gY+22
-    labels.rollTitleMult = makeText(px+20,gY,"Multiplier: x1",13,T().textDim,false,5,3); gY=gY+20
-    makeSquare(px+15,gY,pw-30,1,T().separator,2,3); gY=gY+8
+    makeText(px+20,gY,"[ TITLE ROULETTE ]",18,Color3.fromRGB(255,220,50),false,5,3)
+    gY=gY+24
+    labels.rollModeLabel = makeText(px+20,gY,"Mode: Single Roll",12,Color3.fromRGB(180,180,200),false,5,3)
+    gY=gY+16
+    makeText(px+20,gY,"Better titles won't be replaced!",11,Color3.fromRGB(140,255,140),false,5,3)
+    gY=gY+18
+    makeText(px+20,gY,"Current Title:",14,Color3.fromRGB(200,200,220),false,5,3)
+    gY=gY+20
+    labels.rollTitle = makeText(px+20,gY,"None",20,Color3.fromRGB(140,140,140),false,5,3)
+    gY=gY+22
+    labels.rollTitleMult = makeText(px+20,gY,"Multiplier: x1",13,T().textDim,false,5,3)
+    gY=gY+20
+    makeSquare(px+15,gY,pw-30,1,T().separator,2,3)
+    gY=gY+8
     labels.rollBoxBg = makeSquare(px+25,gY,pw-50,80,Color3.fromRGB(25,25,45),2,3)
     makeSquare(px+25,gY,pw-50,2,Color3.fromRGB(255,215,0),4,3)
     makeSquare(px+25,gY+78,pw-50,2,Color3.fromRGB(255,215,0),4,3)
     makeSquare(px+25,gY,2,80,Color3.fromRGB(255,215,0),4,3)
     makeSquare(px+pw-27,gY,2,80,Color3.fromRGB(255,215,0),4,3)
     labels.rollResult = makeText(px+pw/2,gY+18,"???",28,Color3.fromRGB(100,100,100),true,6,3)
-    labels.rollResultMult = makeText(px+pw/2,gY+52,"",14,T().textDim,true,6,3); gY=gY+92
+    labels.rollResultMult = makeText(px+pw/2,gY+52,"",14,T().textDim,true,6,3)
+    gY=gY+92
     regBtn("roll",px+30,gY,pw-60,50)
     labels.rollBg = makeSquare(btn.roll.x,btn.roll.y,pw-60,50,Color3.fromRGB(200,160,30),3,3)
     labels.rollBtnText = makeText(btn.roll.x+(pw-60)/2,btn.roll.y+8,"ROLL!",24,Color3.fromRGB(255,255,255),true,6,3)
-    labels.rollCostText = makeText(btn.roll.x+(pw-60)/2,btn.roll.y+34,"Cost: 35K coins",12,Color3.fromRGB(255,255,200),true,6,3); gY=gY+62
-    makeSquare(px+15,gY,pw-30,1,T().separator,2,3); gY=gY+8
-    makeText(px+20,gY,"[ DROP RATES ]",14,T().textDim,false,5,3); gY=gY+18
+    labels.rollCostText = makeText(btn.roll.x+(pw-60)/2,btn.roll.y+34,"Cost: 35K coins",12,Color3.fromRGB(255,255,200),true,6,3)
+    gY=gY+62
+    makeSquare(px+15,gY,pw-30,1,T().separator,2,3)
+    gY=gY+8
+    makeText(px+20,gY,"[ DROP RATES ]",14,T().textDim,false,5,3)
+    gY=gY+18
     local drops = {{"Matcha Buyer (x1.1)","59.67%",2},{"Script Dev (x1.5)","30%",3},{"Vetted Dev (x3)","5%",4},{"LUA Lead (x8)","4.3%",5},{"Executive (x30)","0.9%",6},{"The Elite (x100)","0.1%",7},{"Ascended (x250)","0.03%",8}}
     local bgC = {Color3.fromRGB(30,40,30),Color3.fromRGB(25,35,40),Color3.fromRGB(20,25,40),Color3.fromRGB(40,35,20),Color3.fromRGB(45,20,20),Color3.fromRGB(50,50,50),Color3.fromRGB(35,15,50)}
     for i,d in ipairs(drops) do
         makeSquare(px+15,gY,pw-30,18,bgC[i],2,3)
         makeText(px+22,gY+2,d[1],11,titles[d[3]].color,false,5,3)
-        makeText(px+pw-60,gY+2,d[2],11,titles[d[3]].color,false,5,3); gY=gY+20
+        makeText(px+pw-60,gY+2,d[2],11,titles[d[3]].color,false,5,3)
+        gY=gY+20
     end
     labels.omegaDrops1 = makeText(px+22,gY+2,"Singularity (x50)",11,titles[9].color,false,5,3)
-    labels.omegaDrops1R = makeText(px+pw-60,gY+2,"0.002%",11,titles[9].color,false,5,3); gY=gY+16
+    labels.omegaDrops1R = makeText(px+pw-60,gY+2,"0.002%",11,titles[9].color,false,5,3)
+    gY=gY+16
     labels.omegaDrops2 = makeText(px+22,gY+2,"Quasar (x1900)",11,titles[10].color,false,5,3)
-    labels.omegaDrops2R = makeText(px+pw-60,gY+2,"0.0004%",11,titles[10].color,false,5,3); gY=gY+16
+    labels.omegaDrops2R = makeText(px+pw-60,gY+2,"0.0004%",11,titles[10].color,false,5,3)
+    gY=gY+16
     labels.omegaDrops3 = makeText(px+22,gY+2,"The Eye (x10000)",11,titles[11].color,false,5,3)
     labels.omegaDrops3R = makeText(px+pw-60,gY+2,"0.00006%",11,titles[11].color,false,5,3)
 end
@@ -716,14 +777,19 @@ do
     labels.essLocked = makeText(px+pw/2,contentY+180,"LOCKED",28,Color3.fromRGB(100,100,140),true,5,4)
     labels.essLocked2 = makeText(px+pw/2,contentY+215,"Reach Tier 1 to unlock Essence!",14,Color3.fromRGB(140,140,180),true,5,4)
     labels.essLocked3 = makeText(px+pw/2,contentY+238,"Tier up from Rebirth tab",11,Color3.fromRGB(100,100,130),true,5,4)
-    local function eS(x,y,w,h,c,z) local s=Drawing.new("Square"); s.Position=Vector2.new(x,y); s.Size=Vector2.new(w,h); s.Color=c; s.Filled=true; s.Visible=true; s.ZIndex=z or 1; s.Transparency=1; table.insert(allObjects,s); table.insert(objectData,{obj=s,ox=x-px,oy=y-py,ow=w,oh=h}); table.insert(essObjs,s); return s end
-    local function eT(x,y,str,sz,c,cn,z) local t=Drawing.new("Text"); t.Position=Vector2.new(x,y); t.Text=str; t.Size=sz or 18; t.Color=c or Color3.fromRGB(255,255,255); t.Center=cn or false; t.Outline=true; t.Visible=true; t.ZIndex=z or 5; t.Transparency=1; table.insert(allObjects,t); table.insert(objectData,{obj=t,ox=x-px,oy=y-py}); table.insert(essObjs,t); return t end
+    local function eS(x,y,w,h,c,z) local s=Drawing.new("Square"); s.Position=Vector2.new(x,y); s.Size=Vector2.new(w,h); s.Color=c; s.Filled=true; s.Visible=true; s.ZIndex=z or 1; s.Transparency=1; table.insert(allObjects,s); table.insert(objectData,{obj=s,rx=(x-px)/pw,ry=(y-py)/ph,rw=w/pw,rh=h/ph,isSquare=true}); table.insert(essObjs,s); return s end
+    local function eT(x,y,str,sz,c,cn,z) local t=Drawing.new("Text"); t.Position=Vector2.new(x,y); t.Text=str; t.Size=sz or 18; t.Color=c or Color3.fromRGB(255,255,255); t.Center=cn or false; t.Outline=true; t.Visible=true; t.ZIndex=z or 5; t.Transparency=1; table.insert(allObjects,t); table.insert(objectData,{obj=t,rx=(x-px)/pw,ry=(y-py)/ph,baseSize=sz or 18}); table.insert(essObjs,t); return t end
     local eY = contentY+5
-    eT(px+20,eY,"[ ESSENCE ]",16,Color3.fromRGB(0,255,200),false,5); eY=eY+22
-    labels.essCount = eT(px+20,eY,"Essence: 0",18,Color3.fromRGB(0,255,200),false,5); eY=eY+22
-    labels.essPerSec = eT(px+20,eY,"Essence/sec: 1",12,Color3.fromRGB(100,200,180),false,5); eY=eY+20
-    eS(px+15,eY,pw-30,1,T().separator,2); eY=eY+6
-    eT(px+20,eY,"[ ESSENCE UPGRADES ]",13,Color3.fromRGB(100,220,200),false,5); eY=eY+20
+    eT(px+20,eY,"[ ESSENCE ]",16,Color3.fromRGB(0,255,200),false,5)
+    eY=eY+22
+    labels.essCount = eT(px+20,eY,"Essence: 0",18,Color3.fromRGB(0,255,200),false,5)
+    eY=eY+22
+    labels.essPerSec = eT(px+20,eY,"Essence/sec: 1",12,Color3.fromRGB(100,200,180),false,5)
+    eY=eY+20
+    eS(px+15,eY,pw-30,1,T().separator,2)
+    eY=eY+6
+    eT(px+20,eY,"[ ESSENCE UPGRADES ]",13,Color3.fromRGB(100,220,200),false,5)
+    eY=eY+20
     local essUpgs = {{"Coin Boost (x1.5/lvl)","eu1","ebuy1",10},{"Essence Speed (+1/sec)","eu2","ebuy2",25},{"Super Click (+25 power)","eu3","ebuy3",50}}
     for _,eu in ipairs(essUpgs) do
         eS(px+15,eY,pw-30,50,Color3.fromRGB(20,40,35),2)
@@ -732,19 +798,29 @@ do
         labels[eu[2].."Cost"] = eT(px+25,eY+34,"Cost: "..eu[4],11,Color3.fromRGB(0,220,180),false,5)
         regBtn(eu[3],px+pw-83,eY+12,58,26)
         labels[eu[3]:gsub("buy","b").."Bg"] = eS(btn[eu[3]].x,btn[eu[3]].y,58,26,Color3.fromRGB(0,120,100),3)
-        eT(btn[eu[3]].x+29,btn[eu[3]].y+6,"BUY",15,Color3.fromRGB(255,255,255),true,6); eY=eY+56
+        eT(btn[eu[3]].x+29,btn[eu[3]].y+6,"BUY",15,Color3.fromRGB(255,255,255),true,6)
+        eY=eY+56
     end
-    eS(px+15,eY,pw-30,1,T().separator,2); eY=eY+6
-    eT(px+20,eY,"[ ESSENCE REBIRTH ]",13,Color3.fromRGB(0,200,160),false,5); eY=eY+20
-    labels.erStats = eT(px+20,eY,"Rebirths: 0 | Mult: x1",12,Color3.fromRGB(100,200,180),false,5); eY=eY+18
-    labels.erReq = eT(px+20,eY,"Need: 1K Essence",12,T().textDim,false,5); eY=eY+20
+    eS(px+15,eY,pw-30,1,T().separator,2)
+    eY=eY+6
+    eT(px+20,eY,"[ ESSENCE REBIRTH ]",13,Color3.fromRGB(0,200,160),false,5)
+    eY=eY+20
+    labels.erStats = eT(px+20,eY,"Rebirths: 0 | Mult: x1",12,Color3.fromRGB(100,200,180),false,5)
+    eY=eY+18
+    labels.erReq = eT(px+20,eY,"Need: 1K Essence",12,T().textDim,false,5)
+    eY=eY+20
     regBtn("ereb",px+30,eY,pw-60,34)
     labels.erBg = eS(btn.ereb.x,btn.ereb.y,pw-60,34,Color3.fromRGB(0,130,100),3)
-    eT(btn.ereb.x+(pw-60)/2,btn.ereb.y+9,"ESSENCE REBIRTH",16,Color3.fromRGB(255,255,255),true,6); eY=eY+42
-    eS(px+15,eY,pw-30,1,T().separator,2); eY=eY+6
-    eT(px+20,eY,"[ ESSENCE PRESTIGE ]",13,Color3.fromRGB(0,180,255),false,5); eY=eY+20
-    labels.epStats = eT(px+20,eY,"Prestige: 0 | Mult: x1",12,Color3.fromRGB(100,180,255),false,5); eY=eY+18
-    labels.epReq = eT(px+20,eY,"Need: 5 Ess. Rebirths",12,T().textDim,false,5); eY=eY+20
+    eT(btn.ereb.x+(pw-60)/2,btn.ereb.y+9,"ESSENCE REBIRTH",16,Color3.fromRGB(255,255,255),true,6)
+    eY=eY+42
+    eS(px+15,eY,pw-30,1,T().separator,2)
+    eY=eY+6
+    eT(px+20,eY,"[ ESSENCE PRESTIGE ]",13,Color3.fromRGB(0,180,255),false,5)
+    eY=eY+20
+    labels.epStats = eT(px+20,eY,"Prestige: 0 | Mult: x1",12,Color3.fromRGB(100,180,255),false,5)
+    eY=eY+18
+    labels.epReq = eT(px+20,eY,"Need: 5 Ess. Rebirths",12,T().textDim,false,5)
+    eY=eY+20
     regBtn("epres",px+30,eY,pw-60,34)
     labels.epBg = eS(btn.epres.x,btn.epres.y,pw-60,34,Color3.fromRGB(0,80,180),3)
     eT(btn.epres.x+(pw-60)/2,btn.epres.y+9,"ESSENCE PRESTIGE",16,Color3.fromRGB(255,255,255),true,6)
@@ -752,21 +828,41 @@ end
 
 do
     local sY = contentY+5
-    makeText(px+20,sY,"[ SAVE & LOAD ]",18,Color3.fromRGB(100,200,150),false,5,5); sY=sY+28
-    makeText(px+20,sY,"Auto-saves every 60 seconds.",12,T().textDim,false,5,5); sY=sY+16
-    labels.saveStatus = makeText(px+20,sY,"Status: No save",12,Color3.fromRGB(180,180,100),false,5,5); sY=sY+24
-    regBtn("save",px+30,sY,pw-60,32); makeSquare(btn.save.x,btn.save.y,pw-60,32,Color3.fromRGB(30,140,80),3,5); makeText(btn.save.x+(pw-60)/2,btn.save.y+8,"SAVE",16,Color3.fromRGB(255,255,255),true,6,5); sY=sY+38
-    regBtn("load",px+30,sY,pw-60,32); makeSquare(btn.load.x,btn.load.y,pw-60,32,Color3.fromRGB(30,100,180),3,5); makeText(btn.load.x+(pw-60)/2,btn.load.y+8,"LOAD",16,Color3.fromRGB(255,255,255),true,6,5); sY=sY+40
-    makeSquare(px+15,sY,pw-30,1,T().separator,2,5); sY=sY+8
-    regBtn("reset",px+30,sY,pw-60,28); makeSquare(btn.reset.x,btn.reset.y,pw-60,28,Color3.fromRGB(160,30,30),3,5); makeText(btn.reset.x+(pw-60)/2,btn.reset.y+7,"RESET ALL",13,Color3.fromRGB(255,255,255),true,6,5); sY=sY+34
-    regBtn("export",px+30,sY,pw-60,28); makeSquare(btn.export.x,btn.export.y,pw-60,28,Color3.fromRGB(100,60,160),3,5); makeText(btn.export.x+(pw-60)/2,btn.export.y+7,"COPY SAVE",12,Color3.fromRGB(255,255,255),true,6,5); sY=sY+38
-    makeSquare(px+15,sY,pw-30,1,T().separator,2,5); sY=sY+8
-    makeText(px+20,sY,"[ THEME ]",14,Color3.fromRGB(200,200,255),false,5,5); sY=sY+20
-    labels.themeNameLabel = makeText(px+20,sY,"Current: "..themes[state.themeIndex].name,12,Color3.fromRGB(200,200,220),false,5,5); sY=sY+18
+    makeText(px+20,sY,"[ SAVE & LOAD ]",18,Color3.fromRGB(100,200,150),false,5,5)
+    sY=sY+28
+    makeText(px+20,sY,"Auto-saves every 60 seconds.",12,T().textDim,false,5,5)
+    sY=sY+16
+    labels.saveStatus = makeText(px+20,sY,"Status: No save",12,Color3.fromRGB(180,180,100),false,5,5)
+    sY=sY+24
+    regBtn("save",px+30,sY,pw-60,32)
+    makeSquare(btn.save.x,btn.save.y,pw-60,32,Color3.fromRGB(30,140,80),3,5)
+    makeText(btn.save.x+(pw-60)/2,btn.save.y+8,"SAVE",16,Color3.fromRGB(255,255,255),true,6,5)
+    sY=sY+38
+    regBtn("load",px+30,sY,pw-60,32)
+    makeSquare(btn.load.x,btn.load.y,pw-60,32,Color3.fromRGB(30,100,180),3,5)
+    makeText(btn.load.x+(pw-60)/2,btn.load.y+8,"LOAD",16,Color3.fromRGB(255,255,255),true,6,5)
+    sY=sY+40
+    makeSquare(px+15,sY,pw-30,1,T().separator,2,5)
+    sY=sY+8
+    regBtn("reset",px+30,sY,pw-60,28)
+    makeSquare(btn.reset.x,btn.reset.y,pw-60,28,Color3.fromRGB(160,30,30),3,5)
+    makeText(btn.reset.x+(pw-60)/2,btn.reset.y+7,"RESET ALL",13,Color3.fromRGB(255,255,255),true,6,5)
+    sY=sY+34
+    regBtn("export",px+30,sY,pw-60,28)
+    makeSquare(btn.export.x,btn.export.y,pw-60,28,Color3.fromRGB(100,60,160),3,5)
+    makeText(btn.export.x+(pw-60)/2,btn.export.y+7,"COPY SAVE",12,Color3.fromRGB(255,255,255),true,6,5)
+    sY=sY+38
+    makeSquare(px+15,sY,pw-30,1,T().separator,2,5)
+    sY=sY+8
+    makeText(px+20,sY,"[ THEME ]",14,Color3.fromRGB(200,200,255),false,5,5)
+    sY=sY+20
+    labels.themeNameLabel = makeText(px+20,sY,"Current: "..themes[state.themeIndex].name,12,Color3.fromRGB(200,200,220),false,5,5)
+    sY=sY+18
     for i,theme in ipairs(themes) do
         regBtn("theme"..i,px+30,sY,pw-60,22)
         labels["themeBg"..i] = makeSquare(btn["theme"..i].x,btn["theme"..i].y,pw-60,22,(i==state.themeIndex) and Color3.fromRGB(80,80,160) or Color3.fromRGB(40,40,60),3,5)
-        makeText(btn["theme"..i].x+(pw-60)/2,btn["theme"..i].y+4,theme.name,11,Color3.fromRGB(220,220,255),true,6,5); sY=sY+26
+        makeText(btn["theme"..i].x+(pw-60)/2,btn["theme"..i].y+4,theme.name,11,Color3.fromRGB(220,220,255),true,6,5)
+        sY=sY+26
     end
 end
 
@@ -774,13 +870,17 @@ do
     labels.voidLocked = makeText(px+pw/2,contentY+180,"LOCKED",28,Color3.fromRGB(120,40,160),true,5,6)
     labels.voidLocked2 = makeText(px+pw/2,contentY+215,"Reach Tier 2 to unlock!",14,Color3.fromRGB(160,80,200),true,5,6)
     labels.voidLocked3 = makeText(px+pw/2,contentY+238,"Need: 5P + 3EP",11,Color3.fromRGB(120,60,160),true,5,6)
-    local function vS(x,y,w,h,c,z) local s=Drawing.new("Square"); s.Position=Vector2.new(x,y); s.Size=Vector2.new(w,h); s.Color=c; s.Filled=true; s.Visible=true; s.ZIndex=z or 1; s.Transparency=1; table.insert(allObjects,s); table.insert(objectData,{obj=s,ox=x-px,oy=y-py,ow=w,oh=h}); table.insert(voidObjs,s); return s end
-    local function vT(x,y,str,sz,c,cn,z) local t=Drawing.new("Text"); t.Position=Vector2.new(x,y); t.Text=str; t.Size=sz or 18; t.Color=c or Color3.fromRGB(255,255,255); t.Center=cn or false; t.Outline=true; t.Visible=true; t.ZIndex=z or 5; t.Transparency=1; table.insert(allObjects,t); table.insert(objectData,{obj=t,ox=x-px,oy=y-py}); table.insert(voidObjs,t); return t end
+    local function vS(x,y,w,h,c,z) local s=Drawing.new("Square"); s.Position=Vector2.new(x,y); s.Size=Vector2.new(w,h); s.Color=c; s.Filled=true; s.Visible=true; s.ZIndex=z or 1; s.Transparency=1; table.insert(allObjects,s); table.insert(objectData,{obj=s,rx=(x-px)/pw,ry=(y-py)/ph,rw=w/pw,rh=h/ph,isSquare=true}); table.insert(voidObjs,s); return s end
+    local function vT(x,y,str,sz,c,cn,z) local t=Drawing.new("Text"); t.Position=Vector2.new(x,y); t.Text=str; t.Size=sz or 18; t.Color=c or Color3.fromRGB(255,255,255); t.Center=cn or false; t.Outline=true; t.Visible=true; t.ZIndex=z or 5; t.Transparency=1; table.insert(allObjects,t); table.insert(objectData,{obj=t,rx=(x-px)/pw,ry=(y-py)/ph,baseSize=sz or 18}); table.insert(voidObjs,t); return t end
     local vY = contentY+5
-    vT(px+20,vY,"[ THE VOID ]",16,Color3.fromRGB(180,50,255),false,5); vY=vY+22
-    labels.voidCount = vT(px+20,vY,"Void Energy: 0",18,Color3.fromRGB(180,50,255),false,5); vY=vY+22
-    labels.voidPerSec = vT(px+20,vY,"Void/sec: 1",12,Color3.fromRGB(140,80,200),false,5); vY=vY+20
-    vS(px+15,vY,pw-30,1,Color3.fromRGB(100,40,160),2); vY=vY+6
+    vT(px+20,vY,"[ THE VOID ]",16,Color3.fromRGB(180,50,255),false,5)
+    vY=vY+22
+    labels.voidCount = vT(px+20,vY,"Void Energy: 0",18,Color3.fromRGB(180,50,255),false,5)
+    vY=vY+22
+    labels.voidPerSec = vT(px+20,vY,"Void/sec: 1",12,Color3.fromRGB(140,80,200),false,5)
+    vY=vY+20
+    vS(px+15,vY,pw-30,1,Color3.fromRGB(100,40,160),2)
+    vY=vY+6
     local vUpgs = {{"Void Click (+50)","vu1","vbuy1"},{"Void Flow (+1/sec)","vu2","vbuy2"},{"Cosmic Boost (x2)","vu3","vbuy3"},{"Star Drain (x1.5 ess)","vu4","vbuy4"}}
     for _,vu in ipairs(vUpgs) do
         vS(px+15,vY,pw-30,50,Color3.fromRGB(30,15,45),2)
@@ -789,16 +889,23 @@ do
         labels[vu[2].."Cost"] = vT(px+25,vY+34,"Cost: 0",11,Color3.fromRGB(180,50,255),false,5)
         regBtn(vu[3],px+pw-83,vY+12,58,26)
         labels["vb"..vu[2]:sub(3).."Bg"] = vS(btn[vu[3]].x,btn[vu[3]].y,58,26,Color3.fromRGB(100,30,160),3)
-        vT(btn[vu[3]].x+29,btn[vu[3]].y+6,"BUY",15,Color3.fromRGB(255,255,255),true,6); vY=vY+56
+        vT(btn[vu[3]].x+29,btn[vu[3]].y+6,"BUY",15,Color3.fromRGB(255,255,255),true,6)
+        vY=vY+56
     end
-    vS(px+15,vY,pw-30,1,Color3.fromRGB(100,40,160),2); vY=vY+6
-    labels.vrStats = vT(px+20,vY,"Rebirths: 0 | Mult: x1",12,Color3.fromRGB(140,80,200),false,5); vY=vY+18
-    labels.vrReq = vT(px+20,vY,"Need: 2K Void",12,T().textDim,false,5); vY=vY+20
+    vS(px+15,vY,pw-30,1,Color3.fromRGB(100,40,160),2)
+    vY=vY+6
+    labels.vrStats = vT(px+20,vY,"Rebirths: 0 | Mult: x1",12,Color3.fromRGB(140,80,200),false,5)
+    vY=vY+18
+    labels.vrReq = vT(px+20,vY,"Need: 2K Void",12,T().textDim,false,5)
+    vY=vY+20
     regBtn("vreb",px+30,vY,pw-60,34)
     labels.vrBg = vS(btn.vreb.x,btn.vreb.y,pw-60,34,Color3.fromRGB(120,30,180),3)
-    vT(btn.vreb.x+(pw-60)/2,btn.vreb.y+9,"VOID REBIRTH",16,Color3.fromRGB(255,255,255),true,6); vY=vY+42
-    labels.vpStats = vT(px+20,vY,"Prestige: 0 | Mult: x1",12,Color3.fromRGB(120,60,255),false,5); vY=vY+18
-    labels.vpReq = vT(px+20,vY,"Need: 5 Void Rebirths",12,T().textDim,false,5); vY=vY+20
+    vT(btn.vreb.x+(pw-60)/2,btn.vreb.y+9,"VOID REBIRTH",16,Color3.fromRGB(255,255,255),true,6)
+    vY=vY+42
+    labels.vpStats = vT(px+20,vY,"Prestige: 0 | Mult: x1",12,Color3.fromRGB(120,60,255),false,5)
+    vY=vY+18
+    labels.vpReq = vT(px+20,vY,"Need: 5 Void Rebirths",12,T().textDim,false,5)
+    vY=vY+20
     regBtn("vpres",px+30,vY,pw-60,34)
     labels.vpBg = vS(btn.vpres.x,btn.vpres.y,pw-60,34,Color3.fromRGB(80,20,160),3)
     vT(btn.vpres.x+(pw-60)/2,btn.vpres.y+9,"VOID PRESTIGE",16,Color3.fromRGB(255,255,255),true,6)
@@ -825,6 +932,65 @@ labels.omegaZoomLabel = makeText(px+pw-140,contentY+5,"Zoom: 60%",10,Color3.from
 labels.omegaPanHint = makeText(px+pw-140,contentY+16,"+/- Zoom, Drag=Pan",9,Color3.fromRGB(120,120,140),false,5,8)
 labels.omegaNodeInfo = makeText(px+20,contentY+55,"Click a node to purchase",12,Color3.fromRGB(200,160,100),false,5,8)
 labels.omegaNodeEffect = makeText(px+20,contentY+68,"",11,Color3.fromRGB(220,180,100),false,5,8)
+
+do
+    labels.woodLocked = makeText(px+pw/2,contentY+180,"LOCKED",28,Color3.fromRGB(139,90,43),true,5,9)
+    labels.woodLocked2 = makeText(px+pw/2,contentY+215,"Reach Tier 5 to unlock Lumber!",14,Color3.fromRGB(180,130,70),true,5,9)
+    labels.woodLocked3 = makeText(px+pw/2,contentY+238,"10P + 1VP + 1QA coins",11,Color3.fromRGB(140,100,50),true,5,9)
+    local function wS(x,y,w,h,c,z) local s=Drawing.new("Square"); s.Position=Vector2.new(x,y); s.Size=Vector2.new(w,h); s.Color=c; s.Filled=true; s.Visible=true; s.ZIndex=z or 1; s.Transparency=1; table.insert(allObjects,s); table.insert(objectData,{obj=s,rx=(x-px)/pw,ry=(y-py)/ph,rw=w/pw,rh=h/ph,isSquare=true}); table.insert(woodObjs,s); return s end
+    local function wT(x,y,str,sz,c,cn,z) local t=Drawing.new("Text"); t.Position=Vector2.new(x,y); t.Text=str; t.Size=sz or 18; t.Color=c or Color3.fromRGB(255,255,255); t.Center=cn or false; t.Outline=true; t.Visible=true; t.ZIndex=z or 5; t.Transparency=1; table.insert(allObjects,t); table.insert(objectData,{obj=t,rx=(x-px)/pw,ry=(y-py)/ph,baseSize=sz or 18}); table.insert(woodObjs,t); return t end
+    local wY = contentY+5
+    wT(px+20,wY,"[ THE LUMBER YARD ]",16,Color3.fromRGB(180,130,50),false,5)
+    wY=wY+22
+    labels.woodCount = wT(px+20,wY,"Wood: 0",18,Color3.fromRGB(180,130,50),false,5)
+    wY=wY+22
+    labels.woodPerSec = wT(px+20,wY,"Wood/sec: 0.5",12,Color3.fromRGB(160,120,60),false,5)
+    wY=wY+20
+    wS(px+15,wY,pw-30,1,Color3.fromRGB(120,80,30),2)
+    wY=wY+6
+    wT(px+20,wY,"[ LUMBER UPGRADES ]",13,Color3.fromRGB(200,160,60),false,5)
+    wY=wY+20
+    local wUpgs = {
+        {"Axe Sharpen (+1 wood/s)","wu_axe","wbuy_axe"},
+        {"Sawmill (x1.8 wood)","wu_sawmill","wbuy_sawmill"},
+        {"Forest Expand (+3 wood/s)","wu_forest","wbuy_forest"},
+        {"Deep Roots (x2.5 all)","wu_roots","wbuy_roots"},
+        {"Iron Bark (x5 wood)","wu_ironBark","wbuy_ironBark"},
+    }
+    for _,wu in ipairs(wUpgs) do
+        wS(px+15,wY,pw-30,50,Color3.fromRGB(40,30,15),2)
+        wT(px+25,wY+4,wu[1],12,Color3.fromRGB(220,180,80),false,5)
+        labels[wu[2].."Info"] = wT(px+25,wY+19,"Lv: 0",11,Color3.fromRGB(160,140,100),false,5)
+        labels[wu[2].."Cost"] = wT(px+25,wY+34,"Cost: 0",11,Color3.fromRGB(180,130,50),false,5)
+        regBtn(wu[3],px+pw-83,wY+12,58,26)
+        labels[wu[3].."Bg"] = wS(btn[wu[3]].x,btn[wu[3]].y,58,26,Color3.fromRGB(120,80,20),3)
+        wT(btn[wu[3]].x+29,btn[wu[3]].y+6,"BUY",15,Color3.fromRGB(255,255,255),true,6)
+        wY=wY+56
+    end
+    wS(px+15,wY,pw-30,1,Color3.fromRGB(120,80,30),2)
+    wY=wY+6
+    wT(px+20,wY,"[ WOOD REBIRTH ]",13,Color3.fromRGB(160,110,40),false,5)
+    wY=wY+20
+    labels.wrStats = wT(px+20,wY,"Rebirths: 0 | Mult: x1",12,Color3.fromRGB(160,120,60),false,5)
+    wY=wY+18
+    labels.wrReq = wT(px+20,wY,"Need: 10K Wood",12,T().textDim,false,5)
+    wY=wY+20
+    regBtn("wreb",px+30,wY,pw-60,34)
+    labels.wrBg = wS(btn.wreb.x,btn.wreb.y,pw-60,34,Color3.fromRGB(140,90,20),3)
+    wT(btn.wreb.x+(pw-60)/2,btn.wreb.y+9,"WOOD REBIRTH",16,Color3.fromRGB(255,255,255),true,6)
+    wY=wY+42
+    wS(px+15,wY,pw-30,1,Color3.fromRGB(120,80,30),2)
+    wY=wY+6
+    wT(px+20,wY,"[ WOOD PRESTIGE ]",13,Color3.fromRGB(200,140,30),false,5)
+    wY=wY+20
+    labels.wpStats = wT(px+20,wY,"Prestige: 0 | Mult: x1",12,Color3.fromRGB(200,150,50),false,5)
+    wY=wY+18
+    labels.wpReq2 = wT(px+20,wY,"Need: 5 Wood Rebirths",12,T().textDim,false,5)
+    wY=wY+20
+    regBtn("wpres2",px+30,wY,pw-60,34)
+    labels.wpBg2 = wS(btn.wpres2.x,btn.wpres2.y,pw-60,34,Color3.fromRGB(180,120,20),3)
+    wT(btn.wpres2.x+(pw-60)/2,btn.wpres2.y+9,"WOOD PRESTIGE",16,Color3.fromRGB(255,255,255),true,6)
+end
 
 local function removeDrawingList(list)
     for _, obj in ipairs(list) do
@@ -867,10 +1033,10 @@ local function buildGenericTree(tree, nodeState, drawings, objList, glowList, zo
         nodePositions[node.id] = {x=sx, y=sy, cx=sx+nodeW/2, cy=sy+nodeH/2}
     end
 
-    local function tS(x,y,w,h,c,zi) local s=Drawing.new("Square"); s.Position=Vector2.new(x,y); s.Size=Vector2.new(w,h); s.Color=c; s.Filled=true; s.Visible=true; s.ZIndex=zi or 1; s.Transparency=1; table.insert(allObjects,s); table.insert(objectData,{obj=s,ox=x-px,oy=y-py,ow=w,oh=h}); table.insert(objList,s); table.insert(drawings,s); return s end
-    local function tT(x,y,str,sz,c,cn,zi) local t2=Drawing.new("Text"); t2.Position=Vector2.new(x,y); t2.Text=str; t2.Size=sz or 18; t2.Color=c or Color3.fromRGB(255,255,255); t2.Center=cn or false; t2.Outline=true; t2.Visible=true; t2.ZIndex=zi or 5; t2.Transparency=1; table.insert(allObjects,t2); table.insert(objectData,{obj=t2,ox=x-px,oy=y-py}); table.insert(objList,t2); table.insert(drawings,t2); return t2 end
-    local function tL(x1,y1,x2,y2,c,th,zi) local l=Drawing.new("Line"); l.From=Vector2.new(x1,y1); l.To=Vector2.new(x2,y2); l.Color=c; l.Thickness=th or 2; l.Visible=true; l.ZIndex=zi or 2; l.Transparency=1; table.insert(allObjects,l); table.insert(objectData,{obj=l,ox1=x1-px,oy1=y1-py,ox2=x2-px,oy2=y2-py,isLine=true}); table.insert(objList,l); table.insert(drawings,l); return l end
-    local function tG(x,y,r,c,zi) local g=Drawing.new("Circle"); g.Position=Vector2.new(x,y); g.Radius=r; g.Color=c; g.Filled=true; g.Visible=true; g.ZIndex=zi or 1; g.Transparency=0.3; g.NumSides=24; table.insert(allObjects,g); table.insert(objectData,{obj=g,ox=x-px,oy=y-py,isCircle=true}); table.insert(objList,g); table.insert(drawings,g); table.insert(glowList,g); return g end
+    local function tS(x,y,w,h,c,zi) local s=Drawing.new("Square"); s.Position=Vector2.new(x,y); s.Size=Vector2.new(w,h); s.Color=c; s.Filled=true; s.Visible=true; s.ZIndex=zi or 1; s.Transparency=1; table.insert(allObjects,s); table.insert(objectData,{obj=s,rx=(x-px)/pw,ry=(y-py)/ph,rw=w/pw,rh=h/ph,isSquare=true}); table.insert(objList,s); table.insert(drawings,s); return s end
+    local function tT(x,y,str,sz,c,cn,zi) local t2=Drawing.new("Text"); t2.Position=Vector2.new(x,y); t2.Text=str; t2.Size=sz or 18; t2.Color=c or Color3.fromRGB(255,255,255); t2.Center=cn or false; t2.Outline=true; t2.Visible=true; t2.ZIndex=zi or 5; t2.Transparency=1; table.insert(allObjects,t2); table.insert(objectData,{obj=t2,rx=(x-px)/pw,ry=(y-py)/ph,baseSize=sz or 18}); table.insert(objList,t2); table.insert(drawings,t2); return t2 end
+    local function tL(x1,y1,x2,y2,c,th,zi) local l=Drawing.new("Line"); l.From=Vector2.new(x1,y1); l.To=Vector2.new(x2,y2); l.Color=c; l.Thickness=th or 2; l.Visible=true; l.ZIndex=zi or 2; l.Transparency=1; table.insert(allObjects,l); table.insert(objectData,{obj=l,rx1=(x1-px)/pw,ry1=(y1-py)/ph,rx2=(x2-px)/pw,ry2=(y2-py)/ph,isLine=true}); table.insert(objList,l); table.insert(drawings,l); return l end
+    local function tG(x,y,r,c,zi) local g=Drawing.new("Circle"); g.Position=Vector2.new(x,y); g.Radius=r; g.Color=c; g.Filled=true; g.Visible=true; g.ZIndex=zi or 1; g.Transparency=0.3; g.NumSides=24; table.insert(allObjects,g); table.insert(objectData,{obj=g,rx=(x-px)/pw,ry=(y-py)/ph,isCircle=true,baseRadius=r}); table.insert(objList,g); table.insert(drawings,g); table.insert(glowList,g); return g end
 
     for _, node in ipairs(tree) do
         local pos = nodePositions[node.id]
@@ -985,7 +1151,8 @@ local function updateTreeColors(tree, nodeState, labelPrefix, themePrefix, curre
             labels[labelPrefix.."nodeCost_"..node.id].Color = Color3.fromRGB(255,255,200)
             if labels[labelPrefix.."nodeGlow_"..node.id] then labels[labelPrefix.."nodeGlow_"..node.id].Color=glowO_c; labels[labelPrefix.."nodeGlow_"..node.id].Transparency=0.35 end
         elseif available then
-            local cost = getNodeCost(node.id, tree); local canAfford = currency >= cost
+            local cost = getNodeCost(node.id, tree)
+            local canAfford = currency >= cost
             labels[labelPrefix.."nodeBg_"..node.id].Color = canAfford and avail_c or Color3.fromRGB(60,60,40)
             labels[labelPrefix.."nodeBorder_"..node.id].Color = canAfford and availB_c or Color3.fromRGB(120,120,60)
             labels[labelPrefix.."nodeName_"..node.id].Color = Color3.fromRGB(220,220,220)
@@ -1038,30 +1205,74 @@ local function buyOmegaNode(nodeId)
 end
 
 local function serializeState()
-    local ns = ""; for _,n in ipairs(astralSkillTree) do ns = ns..(state.skillNodes[n.id] and "1" or "0") end
-    local os = ""; for _,n in ipairs(omegaSkillTree) do os = os..(state.omegaNodes[n.id] and "1" or "0") end
-    local p = {math.floor(state.coins),state.clickPower,state.clickMultiplier,state.autoUnlocked and 1 or 0,state.upgrades.click.level,state.upgrades.auto.level,state.upgrades.multi.level,state.rebirths,state.rebirthTokens,state.rebirthUpgrades.startCoins.level,state.rebirthUpgrades.permClick.level,state.prestige,state.titleIndex,state.tier,math.floor(state.essence),state.essenceRebirths,state.essencePrestige,state.essenceUpgrades.coinBoost.level,state.essenceUpgrades.essSpeed.level,state.essenceUpgrades.superClick.level,math.floor(state.voidEnergy),state.voidRebirths,state.voidPrestige,state.voidUpgrades.voidClick.level,state.voidUpgrades.voidFlow.level,state.voidUpgrades.cosmicBoost.level,state.voidUpgrades.starDrain.level,math.floor(state.astralShards),#astralSkillTree..":"..ns,state.themeIndex,math.floor(state.omegaEnergy),#omegaSkillTree..":"..os}
-    local s = {}; for i,v in ipairs(p) do s[i]=tostring(v) end; return table.concat(s,",")
+    local ns = ""
+    for _,n in ipairs(astralSkillTree) do ns = ns..(state.skillNodes[n.id] and "1" or "0") end
+    local os = ""
+    for _,n in ipairs(omegaSkillTree) do os = os..(state.omegaNodes[n.id] and "1" or "0") end
+    local p = {
+        math.floor(state.coins),state.clickPower,state.clickMultiplier,state.autoUnlocked and 1 or 0,
+        state.upgrades.click.level,state.upgrades.auto.level,state.upgrades.multi.level,
+        state.rebirths,state.rebirthTokens,state.rebirthUpgrades.startCoins.level,state.rebirthUpgrades.permClick.level,
+        state.prestige,state.titleIndex,state.tier,math.floor(state.essence),state.essenceRebirths,state.essencePrestige,
+        state.essenceUpgrades.coinBoost.level,state.essenceUpgrades.essSpeed.level,state.essenceUpgrades.superClick.level,
+        math.floor(state.voidEnergy),state.voidRebirths,state.voidPrestige,
+        state.voidUpgrades.voidClick.level,state.voidUpgrades.voidFlow.level,state.voidUpgrades.cosmicBoost.level,state.voidUpgrades.starDrain.level,
+        math.floor(state.astralShards),#astralSkillTree..":"..ns,state.themeIndex,
+        math.floor(state.omegaEnergy),#omegaSkillTree..":"..os,
+        math.floor(state.wood),state.woodRebirths,state.woodPrestige,
+        state.woodUpgrades.axe.level,state.woodUpgrades.sawmill.level,state.woodUpgrades.forest.level,
+        state.woodUpgrades.roots.level,state.woodUpgrades.ironBark.level,
+    }
+    local s = {}
+    for i,v in ipairs(p) do s[i]=tostring(v) end
+    return table.concat(s,",")
 end
 
 local function deserializeState(data)
     if not data or data == "" then return false end
-    local p = {}; for val in string.gmatch(data,"([^,]+)") do table.insert(p,val) end
+    local p = {}
+    for val in string.gmatch(data,"([^,]+)") do table.insert(p,val) end
     if #p < 12 then return false end
-    state.coins=tonumber(p[1])or 0;state.clickPower=tonumber(p[2])or 1;state.clickMultiplier=tonumber(p[3])or 1
+    state.coins=tonumber(p[1])or 0
+    state.clickPower=tonumber(p[2])or 1
+    state.clickMultiplier=tonumber(p[3])or 1
     state.autoUnlocked=(tonumber(p[4])or 0)>=1
-    state.upgrades.click.level=tonumber(p[5])or 0;state.upgrades.auto.level=tonumber(p[6])or 0;state.upgrades.multi.level=tonumber(p[7])or 0
-    state.rebirths=tonumber(p[8])or 0;state.rebirthTokens=tonumber(p[9])or 0
-    state.rebirthUpgrades.startCoins.level=tonumber(p[10])or 0;state.rebirthUpgrades.permClick.level=tonumber(p[11])or 0
-    state.prestige=tonumber(p[12])or 0;state.titleIndex=tonumber(p[13])or 1;state.tier=tonumber(p[14])or 0;state.essence=tonumber(p[15])or 0
-    state.essenceRebirths=tonumber(p[16])or 0;state.essencePrestige=tonumber(p[17])or 0
-    state.essenceUpgrades.coinBoost.level=tonumber(p[18])or 0;state.essenceUpgrades.essSpeed.level=tonumber(p[19])or 0;state.essenceUpgrades.superClick.level=tonumber(p[20])or 0
-    state.voidEnergy=tonumber(p[21])or 0;state.voidRebirths=tonumber(p[22])or 0;state.voidPrestige=tonumber(p[23])or 0
-    state.voidUpgrades.voidClick.level=tonumber(p[24])or 0;state.voidUpgrades.voidFlow.level=tonumber(p[25])or 0;state.voidUpgrades.cosmicBoost.level=tonumber(p[26])or 0;state.voidUpgrades.starDrain.level=tonumber(p[27])or 0
+    state.upgrades.click.level=tonumber(p[5])or 0
+    state.upgrades.auto.level=tonumber(p[6])or 0
+    state.upgrades.multi.level=tonumber(p[7])or 0
+    state.rebirths=tonumber(p[8])or 0
+    state.rebirthTokens=tonumber(p[9])or 0
+    state.rebirthUpgrades.startCoins.level=tonumber(p[10])or 0
+    state.rebirthUpgrades.permClick.level=tonumber(p[11])or 0
+    state.prestige=tonumber(p[12])or 0
+    state.titleIndex=tonumber(p[13])or 1
+    state.tier=tonumber(p[14])or 0
+    state.essence=tonumber(p[15])or 0
+    state.essenceRebirths=tonumber(p[16])or 0
+    state.essencePrestige=tonumber(p[17])or 0
+    state.essenceUpgrades.coinBoost.level=tonumber(p[18])or 0
+    state.essenceUpgrades.essSpeed.level=tonumber(p[19])or 0
+    state.essenceUpgrades.superClick.level=tonumber(p[20])or 0
+    state.voidEnergy=tonumber(p[21])or 0
+    state.voidRebirths=tonumber(p[22])or 0
+    state.voidPrestige=tonumber(p[23])or 0
+    state.voidUpgrades.voidClick.level=tonumber(p[24])or 0
+    state.voidUpgrades.voidFlow.level=tonumber(p[25])or 0
+    state.voidUpgrades.cosmicBoost.level=tonumber(p[26])or 0
+    state.voidUpgrades.starDrain.level=tonumber(p[27])or 0
     state.astralShards=tonumber(p[28])or 0
-    if p[29] then local d=p[29]; local c=string.find(d,":"); local ns=c and string.sub(d,c+1) or d; for i,n in ipairs(astralSkillTree) do state.skillNodes[n.id]=(i<=#ns and string.sub(ns,i,i)=="1") end end
-    state.themeIndex=tonumber(p[30])or 1;state.omegaEnergy=tonumber(p[31])or 0
-    if p[32] then local d=p[32]; local c=string.find(d,":"); local ns=c and string.sub(d,c+1) or d; for i,n in ipairs(omegaSkillTree) do state.omegaNodes[n.id]=(i<=#ns and string.sub(ns,i,i)=="1") end end
+    if p[29] then local d=p[29]; local c=string.find(d,":"); local ns2=c and string.sub(d,c+1) or d; for i,n in ipairs(astralSkillTree) do state.skillNodes[n.id]=(i<=#ns2 and string.sub(ns2,i,i)=="1") end end
+    state.themeIndex=tonumber(p[30])or 1
+    state.omegaEnergy=tonumber(p[31])or 0
+    if p[32] then local d=p[32]; local c=string.find(d,":"); local ns2=c and string.sub(d,c+1) or d; for i,n in ipairs(omegaSkillTree) do state.omegaNodes[n.id]=(i<=#ns2 and string.sub(ns2,i,i)=="1") end end
+    state.wood=tonumber(p[33])or 0
+    state.woodRebirths=tonumber(p[34])or 0
+    state.woodPrestige=tonumber(p[35])or 0
+    state.woodUpgrades.axe.level=tonumber(p[36])or 0
+    state.woodUpgrades.sawmill.level=tonumber(p[37])or 0
+    state.woodUpgrades.forest.level=tonumber(p[38])or 0
+    state.woodUpgrades.roots.level=tonumber(p[39])or 0
+    state.woodUpgrades.ironBark.level=tonumber(p[40])or 0
     if state.themeIndex<1 or state.themeIndex>#themes then state.themeIndex=1 end
     if state.titleIndex<1 or state.titleIndex>#titles then state.titleIndex=1 end
     return true
@@ -1075,7 +1286,7 @@ local function getCost(upg) local r=upg.baseCost*(upg.costMult^upg.level); if r~
 local function rebirthMultiplier() return 1+(state.rebirths*0.5) end
 local function prestigeMultiplier() return math.min(3^state.prestige,1e300) end
 local function titleMultiplier() return titles[state.titleIndex].mult end
-local function tierMultiplier() if state.tier==0 then return 1 elseif state.tier==1 then return 25 elseif state.tier==2 then return 150 elseif state.tier==3 then return 10000 else return 1000000 end end
+local function tierMultiplier() if state.tier==0 then return 1 elseif state.tier==1 then return 25 elseif state.tier==2 then return 150 elseif state.tier==3 then return 10000 elseif state.tier==4 then return 1000000 else return 100000000 end end
 local function essenceCoinBoost() return math.min(1.5^state.essenceUpgrades.coinBoost.level,1e300) end
 local function essenceRebirthMult() return math.min(2^state.essenceRebirths,1e300) end
 local function essencePrestigeMult() return math.min(3^state.essencePrestige,1e300) end
@@ -1083,6 +1294,11 @@ local function cosmicBoostMult() return math.min(2^state.voidUpgrades.cosmicBoos
 local function voidRebirthMult() return math.min(2^state.voidRebirths,1e300) end
 local function voidPrestigeMult() return math.min(4^state.voidPrestige,1e300) end
 local function starDrainMult() return math.min(1.5^state.voidUpgrades.starDrain.level,1e300) end
+local function woodRebirthMult() return math.min(2.5^state.woodRebirths,1e300) end
+local function woodPrestigeMult() return math.min(5^state.woodPrestige,1e300) end
+local function woodSawmillMult() return math.min(1.8^state.woodUpgrades.sawmill.level,1e300) end
+local function woodRootsMult() return math.min(2.5^state.woodUpgrades.roots.level,1e300) end
+local function woodIronBarkMult() return math.min(5^state.woodUpgrades.ironBark.level,1e300) end
 
 local function sn(id) return state.skillNodes[id] end
 local function on(id) return state.omegaNodes[id] end
@@ -1116,7 +1332,7 @@ local function omegaAstralMult() local m=1; if on("o_rift") then m=m*2 end; if o
 local function omegaOmegaGenMult() local m=1; if on("o_warp") then m=m*3 end; if on("o_dimension") then m=m*5 end; if on("o_omniscient") then m=m*10 end; return m end
 local function omegaCritData() if on("o_godstrike") then return {chance=40,mult=30} elseif on("o_berserk") then return {chance=30,mult=20} elseif on("o_rage") then return {chance=20,mult=15} else return nil end end
 
-local function totalMultiplier() local m=rebirthMultiplier()*prestigeMultiplier()*titleMultiplier()*tierMultiplier()*essenceCoinBoost()*essencePrestigeMult()*cosmicBoostMult()*voidPrestigeMult()*skillDefMult()*skillMultiMult()*skillFusionMult()*skillOmegaMult()*skillWealthMult()*skillNovaMult()*skillApexMult()*skillHarmonyMult()*skillFluxMult()*omegaCoinMult()*omegaEverythingMult(); if m~=m or m==math.huge then return 1e300 end; return m end
+local function totalMultiplier() local m=rebirthMultiplier()*prestigeMultiplier()*titleMultiplier()*tierMultiplier()*essenceCoinBoost()*essencePrestigeMult()*cosmicBoostMult()*voidPrestigeMult()*skillDefMult()*skillMultiMult()*skillFusionMult()*skillOmegaMult()*skillWealthMult()*skillNovaMult()*skillApexMult()*skillHarmonyMult()*skillFluxMult()*omegaCoinMult()*omegaEverythingMult()*woodRootsMult(); if m~=m or m==math.huge then return 1e300 end; return m end
 local function effectiveClickBase() local base=state.clickPower+state.rebirthUpgrades.permClick.level*15+state.essenceUpgrades.superClick.level*25+state.voidUpgrades.voidClick.level*50+skillAtkBonus()+omegaClickBonus(); local r=base*math.min(state.clickMultiplier,1e300)*totalMultiplier(); if r~=r or r==math.huge then return 1e300 end; return r end
 local function effectiveClickWithCrit() local total=effectiveClickBase(); local oCrit=omegaCritData(); if oCrit then if math.random(1,1000)<=(oCrit.chance*10) then total=total*oCrit.mult;state.critActive=true else state.critActive=false end elseif sn("fury") or sn("storm") then local ch,ml=10,5; if sn("storm") then ch=25;ml=12 elseif sn("fury") then ch=15;ml=8 end; if math.random(1,100)<=ch then total=total*ml;state.critActive=true else state.critActive=false end elseif sn("crit") or sn("fusion") then if math.random(1,100)<=10 then total=total*5;state.critActive=true else state.critActive=false end else state.critActive=false end; if total~=total or total==math.huge then return 1e300 end; return total end
 local function effectiveAutoClick() return effectiveClickBase() end
@@ -1127,6 +1343,7 @@ local function effectiveEssPerSec() if state.tier<1 then return 0 end; local r=(
 local function effectiveVoidPerSec() if state.tier<2 then return 0 end; local r=(1+state.voidUpgrades.voidFlow.level+skillRegenBonus())*voidRebirthMult()*skillArmorMult()*skillRushMult()*skillBastionMult()*skillFortMult()*skillEternalMult()*omegaGenMult()*omegaEverythingMult(); if r~=r or r==math.huge then return 1e300 end; return r end
 local function effectiveAstralPerSec() if state.tier<3 then return 0 end; local r=(1+skillTempoBonus()+skillTitanBonus())*skillOmegaMult()*skillFluxMult()*skillHarmonyMult()*omegaGenMult()*omegaAstralMult()*omegaEverythingMult(); if r~=r or r==math.huge then return 1e300 end; return r end
 local function effectiveOmegaPerSec() if state.tier<4 then return 0 end; local r=1*omegaOmegaGenMult()*omegaEverythingMult(); if r~=r or r==math.huge then return 1e300 end; return r end
+local function effectiveWoodPerSec() if state.tier<5 then return 0 end; local base=0.5+(state.woodUpgrades.axe.level*1)+(state.woodUpgrades.forest.level*3); local r=base*woodSawmillMult()*woodIronBarkMult()*woodRebirthMult()*woodPrestigeMult(); if r~=r or r==math.huge then return 1e300 end; return r end
 
 local function rebirthCost() return safeCost(15000*(3^state.rebirths)) end
 local function prestigeCost() return 10*(state.prestige+1) end
@@ -1134,52 +1351,160 @@ local function essRebirthCost() return safeCost(1000*(3^state.essenceRebirths)) 
 local function essPrestigeCost() return 5*(state.essencePrestige+1) end
 local function voidRebirthCost() return safeCost(2000*(3^state.voidRebirths)) end
 local function voidPrestigeCost() return 5*(state.voidPrestige+1) end
+local function woodRebirthCost() return safeCost(10000*(4^state.woodRebirths)) end
+local function woodPrestigeCost() return 5*(state.woodPrestige+1) end
 local function rebirthUpgCost(n) if n=="startCoins" then return 1+state.rebirthUpgrades.startCoins.level else return 2+state.rebirthUpgrades.permClick.level*2 end end
-local function tierRequirementsMet() if state.tier==0 then return state.prestige>=2 elseif state.tier==1 then return state.prestige>=5 and state.essencePrestige>=3 elseif state.tier==2 then return state.prestige>=5 and state.essencePrestige>=3 and state.voidPrestige>=3 elseif state.tier==3 then return allAstralOwned() else return false end end
+local function tierRequirementsMet() if state.tier==0 then return state.prestige>=2 elseif state.tier==1 then return state.prestige>=5 and state.essencePrestige>=3 elseif state.tier==2 then return state.prestige>=5 and state.essencePrestige>=3 and state.voidPrestige>=3 elseif state.tier==3 then return allAstralOwned() elseif state.tier==4 then return state.prestige>=10 and state.voidPrestige>=1 and state.coins>=1e15 else return false end end
 
 local function rollTitle() local r=math.random(1,10000000); if state.tier>=4 then if r<=6 then return 11 elseif r<=47 then return 10 elseif r<=247 then return 9 elseif r<=3247 then return 8 elseif r<=13247 then return 7 elseif r<=103247 then return 6 elseif r<=533247 then return 5 elseif r<=1033247 then return 4 elseif r<=4033247 then return 3 else return 2 end elseif state.tier>=2 then local r2=math.random(1,10000); if r2<=5967 then return 2 elseif r2<=8967 then return 3 elseif r2<=9467 then return 4 elseif r2<=9897 then return 5 elseif r2<=9987 then return 6 elseif r2<=9997 then return 7 else return 8 end else local r2=math.random(1,10000); if r2<=5970 then return 2 elseif r2<=8970 then return 3 elseif r2<=9470 then return 4 elseif r2<=9900 then return 5 elseif r2<=9990 then return 6 else return 7 end end end
 
-local function applyTheme() local t=T(); labels.bodyBg.Color=t.bg; labels.headerBg.Color=t.header; labels.headerTitle.Color=t.headerText; labels.closeBg.Color=t.closeBtn; labels.footerBg.Color=t.footer; labels.footerText.Color=t.footerText; labels.coins.Color=t.coinText; labels.resizeC.Color=t.resize; labels.resizeGrip.Color=t.resize; for i=1,8 do labels["tab"..i.."Bg"].Color=(i==state.currentTab) and t.tabActive or t.tabInactive; labels["tab"..i.."L"].Color=(i==state.currentTab) and t.tabTextActive or t.tabTextInactive end; for i=1,#themes do if labels["themeBg"..i] then labels["themeBg"..i].Color=(i==state.themeIndex) and Color3.fromRGB(80,80,160) or Color3.fromRGB(40,40,60) end end; labels.themeNameLabel.Text="Current: "..t.name; rebuildAstralTree(); rebuildOmegaTree() end
+local function applyTheme() local t=T(); labels.bodyBg.Color=t.bg; labels.headerBg.Color=t.header; labels.headerTitle.Color=t.headerText; labels.closeBg.Color=t.closeBtn; labels.footerBg.Color=t.footer; labels.footerText.Color=t.footerText; labels.coins.Color=t.coinText; labels.resizeC.Color=t.resize; labels.resizeGrip.Color=t.resize; for i=1,TAB_COUNT do labels["tab"..i.."Bg"].Color=(i==state.currentTab) and t.tabActive or t.tabInactive; labels["tab"..i.."L"].Color=(i==state.currentTab) and t.tabTextActive or t.tabTextInactive end; for i=1,#themes do if labels["themeBg"..i] then labels["themeBg"..i].Color=(i==state.themeIndex) and Color3.fromRGB(80,80,160) or Color3.fromRGB(40,40,60) end end; labels.themeNameLabel.Text="Current: "..t.name; rebuildAstralTree(); rebuildOmegaTree() end
 
 updateUI = function()
     if state.minimized then return end
     local ec,eps = effectiveClickDisplay(),effectivePerSecond()
     local ct = titles[state.titleIndex]
-    labels.coins.Text="Coins: "..formatNumber(state.coins); labels.stats.Text="Click: "..formatNumber(ec).."  |  /Sec: "..formatNumber(eps); labels.mult.Text="Total Mult: x"..formatNumber(totalMultiplier()); labels.clickSub.Text="+"..formatNumber(ec).." coins"; labels.title.Text="Title: "..ct.name.." (x"..ct.mult..")"; labels.title.Color=ct.color
-    local c1=getCost(state.upgrades.click); labels.u1Info.Text="Level: "..state.upgrades.click.level; labels.u1Cost.Text="Cost: "..formatNumber(c1); labels.b1Bg.Color=state.coins>=c1 and Color3.fromRGB(40,170,40) or Color3.fromRGB(120,40,40)
-    if not state.autoUnlocked then labels.u2Title.Text="Auto Clicker [UNLOCK]"; labels.u2Info.Text="Unlocks auto clicking"; labels.u2Cost.Text="Cost: "..formatNumber(AUTO_UNLOCK_COST); labels.b2Bg.Color=state.coins>=AUTO_UNLOCK_COST and Color3.fromRGB(40,170,40) or Color3.fromRGB(120,40,40); labels.b2Text.Text="BUY"; labels.m2Bg.Color=Color3.fromRGB(30,30,30); labels.m2Text.Color=Color3.fromRGB(80,80,80)
-    else local c2=getCost(state.upgrades.auto); labels.u2Title.Text="Auto Speed (-0.05s)"; labels.u2Info.Text="Lv: "..state.upgrades.auto.level.." ("..string.format("%.2f",autoInterval()).."s)"; labels.u2Cost.Text="Cost: "..formatNumber(c2); labels.b2Bg.Color=state.coins>=c2 and Color3.fromRGB(40,170,40) or Color3.fromRGB(120,40,40); labels.b2Text.Text="+1"; if state.rebirths<5 then labels.m2Bg.Color=Color3.fromRGB(30,30,30);labels.m2Text.Color=Color3.fromRGB(80,80,80) else labels.m2Bg.Color=state.coins>=c2 and Color3.fromRGB(30,120,180) or Color3.fromRGB(40,50,70);labels.m2Text.Color=Color3.fromRGB(255,255,255) end end
-    local c3=getCost(state.upgrades.multi); labels.u3Info.Text="Level: "..state.upgrades.multi.level.." (x"..formatNumber(state.clickMultiplier)..")"; labels.u3Cost.Text="Cost: "..formatNumber(c3); labels.b3Bg.Color=state.coins>=c3 and Color3.fromRGB(40,170,40) or Color3.fromRGB(120,40,40)
+    labels.coins.Text="Coins: "..formatNumber(state.coins)
+    labels.stats.Text="Click: "..formatNumber(ec).."  |  /Sec: "..formatNumber(eps)
+    labels.mult.Text="Total Mult: x"..formatNumber(totalMultiplier())
+    labels.clickSub.Text="+"..formatNumber(ec).." coins"
+    labels.title.Text="Title: "..ct.name.." (x"..ct.mult..")"
+    labels.title.Color=ct.color
+    local c1=getCost(state.upgrades.click)
+    labels.u1Info.Text="Level: "..state.upgrades.click.level
+    labels.u1Cost.Text="Cost: "..formatNumber(c1)
+    labels.b1Bg.Color=state.coins>=c1 and Color3.fromRGB(40,170,40) or Color3.fromRGB(120,40,40)
+    if not state.autoUnlocked then
+        labels.u2Title.Text="Auto Clicker [UNLOCK]"
+        labels.u2Info.Text="Unlocks auto clicking"
+        labels.u2Cost.Text="Cost: "..formatNumber(AUTO_UNLOCK_COST)
+        labels.b2Bg.Color=state.coins>=AUTO_UNLOCK_COST and Color3.fromRGB(40,170,40) or Color3.fromRGB(120,40,40)
+        labels.b2Text.Text="BUY"
+        labels.m2Bg.Color=Color3.fromRGB(30,30,30)
+        labels.m2Text.Color=Color3.fromRGB(80,80,80)
+    else
+        local c2=getCost(state.upgrades.auto)
+        labels.u2Title.Text="Auto Speed (-0.05s)"
+        labels.u2Info.Text="Lv: "..state.upgrades.auto.level.." ("..string.format("%.2f",autoInterval()).."s)"
+        labels.u2Cost.Text="Cost: "..formatNumber(c2)
+        labels.b2Bg.Color=state.coins>=c2 and Color3.fromRGB(40,170,40) or Color3.fromRGB(120,40,40)
+        labels.b2Text.Text="+1"
+        if state.rebirths<5 then labels.m2Bg.Color=Color3.fromRGB(30,30,30);labels.m2Text.Color=Color3.fromRGB(80,80,80) else labels.m2Bg.Color=state.coins>=c2 and Color3.fromRGB(30,120,180) or Color3.fromRGB(40,50,70);labels.m2Text.Color=Color3.fromRGB(255,255,255) end
+    end
+    local c3=getCost(state.upgrades.multi)
+    labels.u3Info.Text="Level: "..state.upgrades.multi.level.." (x"..formatNumber(state.clickMultiplier)..")"
+    labels.u3Cost.Text="Cost: "..formatNumber(c3)
+    labels.b3Bg.Color=state.coins>=c3 and Color3.fromRGB(40,170,40) or Color3.fromRGB(120,40,40)
     if state.rebirths<5 then labels.m1Bg.Color=Color3.fromRGB(30,30,30);labels.m1Text.Color=Color3.fromRGB(80,80,80);labels.m3Bg.Color=Color3.fromRGB(30,30,30);labels.m3Text.Color=Color3.fromRGB(80,80,80) else labels.m1Bg.Color=state.coins>=c1 and Color3.fromRGB(30,120,180) or Color3.fromRGB(40,50,70);labels.m1Text.Color=Color3.fromRGB(255,255,255);labels.m3Bg.Color=state.coins>=c3 and Color3.fromRGB(30,120,180) or Color3.fromRGB(40,50,70);labels.m3Text.Color=Color3.fromRGB(255,255,255) end
-    labels.rbStats.Text="Rebirths: "..state.rebirths.." | Tokens: "..state.rebirthTokens; labels.rbMult.Text="Rebirth Mult: x"..string.format("%.1f",rebirthMultiplier()); labels.rbReq.Text="Need: "..formatNumber(rebirthCost()).." coins"; labels.rbBg.Color=state.coins>=rebirthCost() and Color3.fromRGB(200,140,30) or Color3.fromRGB(100,60,20)
-    local rc1=rebirthUpgCost("startCoins"); labels.ru1Info.Text="Lv: "..state.rebirthUpgrades.startCoins.level.." (+"..formatNumber(state.rebirthUpgrades.startCoins.level*1000)..")"; labels.ru1Cost.Text="Cost: "..rc1.." Token"..(rc1>1 and "s" or ""); labels.rb1Bg.Color=state.rebirthTokens>=rc1 and Color3.fromRGB(180,130,30) or Color3.fromRGB(80,50,20)
-    local rc2=rebirthUpgCost("permClick"); labels.ru2Info.Text="Lv: "..state.rebirthUpgrades.permClick.level.." (+"..tostring(state.rebirthUpgrades.permClick.level*15)..")"; labels.ru2Cost.Text="Cost: "..rc2.." Tokens"; labels.rb2Bg.Color=state.rebirthTokens>=rc2 and Color3.fromRGB(180,130,30) or Color3.fromRGB(80,50,20)
-    labels.prStats.Text="Prestige: "..state.prestige; labels.prMult.Text="Prestige Mult: x"..formatNumber(prestigeMultiplier()); labels.prReq.Text="Need: "..prestigeCost().." Rebirths"; labels.prBg.Color=state.rebirths>=prestigeCost() and Color3.fromRGB(160,60,240) or Color3.fromRGB(60,20,80)
+    labels.rbStats.Text="Rebirths: "..state.rebirths.." | Tokens: "..state.rebirthTokens
+    labels.rbMult.Text="Rebirth Mult: x"..string.format("%.1f",rebirthMultiplier())
+    labels.rbReq.Text="Need: "..formatNumber(rebirthCost()).." coins"
+    labels.rbBg.Color=state.coins>=rebirthCost() and Color3.fromRGB(200,140,30) or Color3.fromRGB(100,60,20)
+    local rc1=rebirthUpgCost("startCoins")
+    labels.ru1Info.Text="Lv: "..state.rebirthUpgrades.startCoins.level.." (+"..formatNumber(state.rebirthUpgrades.startCoins.level*1000)..")"
+    labels.ru1Cost.Text="Cost: "..rc1.." Token"..(rc1>1 and "s" or "")
+    labels.rb1Bg.Color=state.rebirthTokens>=rc1 and Color3.fromRGB(180,130,30) or Color3.fromRGB(80,50,20)
+    local rc2=rebirthUpgCost("permClick")
+    labels.ru2Info.Text="Lv: "..state.rebirthUpgrades.permClick.level.." (+"..tostring(state.rebirthUpgrades.permClick.level*15)..")"
+    labels.ru2Cost.Text="Cost: "..rc2.." Tokens"
+    labels.rb2Bg.Color=state.rebirthTokens>=rc2 and Color3.fromRGB(180,130,30) or Color3.fromRGB(80,50,20)
+    labels.prStats.Text="Prestige: "..state.prestige
+    labels.prMult.Text="Prestige Mult: x"..formatNumber(prestigeMultiplier())
+    labels.prReq.Text="Need: "..prestigeCost().." Rebirths"
+    labels.prBg.Color=state.rebirths>=prestigeCost() and Color3.fromRGB(160,60,240) or Color3.fromRGB(60,20,80)
     labels.tierStats.Text="Tier: "..state.tier.." | Mult: x"..formatNumber(tierMultiplier())
-    if state.tier>=4 then labels.tierReq.Text="MAXED";labels.tierBtnText.Text="MAXED";labels.tierBg.Color=Color3.fromRGB(60,60,60);labels.tierDesc.Text="All tiers unlocked!" elseif state.tier==3 then labels.tierReq.Text="Full Astral Tree";labels.tierBtnText.Text="TIER UP";labels.tierDesc.Text="Unlocks Omega! x1M mult!";labels.tierBg.Color=tierRequirementsMet() and Color3.fromRGB(255,140,0) or Color3.fromRGB(80,45,0) elseif state.tier==2 then labels.tierReq.Text="Need: 5P+3EP+3VP";labels.tierBtnText.Text="TIER UP";labels.tierDesc.Text="Unlocks Astral. x10K mult!";labels.tierBg.Color=tierRequirementsMet() and Color3.fromRGB(200,170,30) or Color3.fromRGB(80,60,15) elseif state.tier==1 then labels.tierReq.Text="Need: 5P+3EP";labels.tierBtnText.Text="TIER UP";labels.tierDesc.Text="Unlocks Void. x150 mult!";labels.tierBg.Color=tierRequirementsMet() and Color3.fromRGB(120,30,180) or Color3.fromRGB(50,15,70) else labels.tierReq.Text="Need: 2 Prestiges";labels.tierBtnText.Text="TIER UP";labels.tierDesc.Text="Unlocks Essence. x25 mult!";labels.tierBg.Color=tierRequirementsMet() and Color3.fromRGB(200,50,50) or Color3.fromRGB(80,20,20) end
-    labels.rollTitle.Text=ct.name; labels.rollTitle.Color=ct.color; labels.rollTitleMult.Text="Multiplier: x"..ct.mult; local rollCost=state.tier>=4 and (ROLL_COST*10) or ROLL_COST; labels.rollModeLabel.Text=state.tier>=4 and "Mode: 10x Roll (best kept!)" or "Mode: Single Roll"; labels.rollCostText.Text="Cost: "..formatNumber(rollCost).." coins"; labels.rollBtnText.Text=state.tier>=4 and "ROLL x10!" or "ROLL!"; labels.rollBg.Color=(state.coins>=rollCost and not state.rolling) and Color3.fromRGB(200,160,30) or Color3.fromRGB(80,60,15)
-    local omegaVis=state.tier>=4; labels.omegaDrops1.Visible=(state.currentTab==3 and omegaVis); labels.omegaDrops1R.Visible=labels.omegaDrops1.Visible; labels.omegaDrops2.Visible=labels.omegaDrops1.Visible; labels.omegaDrops2R.Visible=labels.omegaDrops1.Visible; labels.omegaDrops3.Visible=labels.omegaDrops1.Visible; labels.omegaDrops3R.Visible=labels.omegaDrops1.Visible
-    labels.essCount.Text="Essence: "..formatNumber(state.essence); labels.essPerSec.Text="Essence/sec: "..formatNumber(effectiveEssPerSec())
+    if state.tier>=5 then
+        labels.tierReq.Text="MAXED"
+        labels.tierBtnText.Text="MAXED"
+        labels.tierBg.Color=Color3.fromRGB(60,60,60)
+        labels.tierDesc.Text="All tiers unlocked!"
+    elseif state.tier==4 then
+        labels.tierReq.Text="10P+1VP+1QA coins"
+        labels.tierBtnText.Text="TIER UP"
+        labels.tierDesc.Text="Unlocks Lumber! x100M mult!"
+        labels.tierBg.Color=tierRequirementsMet() and Color3.fromRGB(180,130,50) or Color3.fromRGB(70,50,20)
+    elseif state.tier==3 then
+        labels.tierReq.Text="Full Astral Tree"
+        labels.tierBtnText.Text="TIER UP"
+        labels.tierDesc.Text="Unlocks Omega! x1M mult!"
+        labels.tierBg.Color=tierRequirementsMet() and Color3.fromRGB(255,140,0) or Color3.fromRGB(80,45,0)
+    elseif state.tier==2 then
+        labels.tierReq.Text="Need: 5P+3EP+3VP"
+        labels.tierBtnText.Text="TIER UP"
+        labels.tierDesc.Text="Unlocks Astral. x10K mult!"
+        labels.tierBg.Color=tierRequirementsMet() and Color3.fromRGB(200,170,30) or Color3.fromRGB(80,60,15)
+    elseif state.tier==1 then
+        labels.tierReq.Text="Need: 5P+3EP"
+        labels.tierBtnText.Text="TIER UP"
+        labels.tierDesc.Text="Unlocks Void. x150 mult!"
+        labels.tierBg.Color=tierRequirementsMet() and Color3.fromRGB(120,30,180) or Color3.fromRGB(50,15,70)
+    else
+        labels.tierReq.Text="Need: 2 Prestiges"
+        labels.tierBtnText.Text="TIER UP"
+        labels.tierDesc.Text="Unlocks Essence. x25 mult!"
+        labels.tierBg.Color=tierRequirementsMet() and Color3.fromRGB(200,50,50) or Color3.fromRGB(80,20,20)
+    end
+    labels.rollTitle.Text=ct.name
+    labels.rollTitle.Color=ct.color
+    labels.rollTitleMult.Text="Multiplier: x"..ct.mult
+    local rollCost=state.tier>=4 and (ROLL_COST*10) or ROLL_COST
+    labels.rollModeLabel.Text=state.tier>=4 and "Mode: 10x Roll (best kept!)" or "Mode: Single Roll"
+    labels.rollCostText.Text="Cost: "..formatNumber(rollCost).." coins"
+    labels.rollBtnText.Text=state.tier>=4 and "ROLL x10!" or "ROLL!"
+    labels.rollBg.Color=(state.coins>=rollCost and not state.rolling) and Color3.fromRGB(200,160,30) or Color3.fromRGB(80,60,15)
+    local omegaVis=state.tier>=4
+    labels.omegaDrops1.Visible=(state.currentTab==3 and omegaVis)
+    labels.omegaDrops1R.Visible=labels.omegaDrops1.Visible
+    labels.omegaDrops2.Visible=labels.omegaDrops1.Visible
+    labels.omegaDrops2R.Visible=labels.omegaDrops1.Visible
+    labels.omegaDrops3.Visible=labels.omegaDrops1.Visible
+    labels.omegaDrops3R.Visible=labels.omegaDrops1.Visible
+    labels.essCount.Text="Essence: "..formatNumber(state.essence)
+    labels.essPerSec.Text="Essence/sec: "..formatNumber(effectiveEssPerSec())
     local eUpgData = {{"coinBoost","eu1","eb1"},{"essSpeed","eu2","eb2"},{"superClick","eu3","eb3"}}
     for _,eu in ipairs(eUpgData) do local upg=state.essenceUpgrades[eu[1]]; local cost=getCost(upg); labels[eu[2].."Info"].Text="Lv: "..upg.level; labels[eu[2].."Cost"].Text="Cost: "..formatNumber(cost).." Ess."; labels[eu[3].."Bg"].Color=state.essence>=cost and Color3.fromRGB(0,150,120) or Color3.fromRGB(40,60,50) end
-    labels.erStats.Text="Rebirths: "..state.essenceRebirths.." | Mult: x"..formatNumber(essenceRebirthMult()); labels.erReq.Text="Need: "..formatNumber(essRebirthCost()).." Essence"; labels.erBg.Color=state.essence>=essRebirthCost() and Color3.fromRGB(0,160,120) or Color3.fromRGB(30,60,50)
-    labels.epStats.Text="Prestige: "..state.essencePrestige.." | Mult: x"..formatNumber(essencePrestigeMult()); labels.epReq.Text="Need: "..essPrestigeCost().." Ess. Rebirths"; labels.epBg.Color=state.essenceRebirths>=essPrestigeCost() and Color3.fromRGB(0,100,200) or Color3.fromRGB(20,40,70)
-    labels.voidCount.Text="Void Energy: "..formatNumber(state.voidEnergy); labels.voidPerSec.Text="Void/sec: "..formatNumber(effectiveVoidPerSec())
+    labels.erStats.Text="Rebirths: "..state.essenceRebirths.." | Mult: x"..formatNumber(essenceRebirthMult())
+    labels.erReq.Text="Need: "..formatNumber(essRebirthCost()).." Essence"
+    labels.erBg.Color=state.essence>=essRebirthCost() and Color3.fromRGB(0,160,120) or Color3.fromRGB(30,60,50)
+    labels.epStats.Text="Prestige: "..state.essencePrestige.." | Mult: x"..formatNumber(essencePrestigeMult())
+    labels.epReq.Text="Need: "..essPrestigeCost().." Ess. Rebirths"
+    labels.epBg.Color=state.essenceRebirths>=essPrestigeCost() and Color3.fromRGB(0,100,200) or Color3.fromRGB(20,40,70)
+    labels.voidCount.Text="Void Energy: "..formatNumber(state.voidEnergy)
+    labels.voidPerSec.Text="Void/sec: "..formatNumber(effectiveVoidPerSec())
     local vUpgKeys = {{"voidClick","vu1","vb1"},{"voidFlow","vu2","vb2"},{"cosmicBoost","vu3","vb3"},{"starDrain","vu4","vb4"}}
     for _,vu in ipairs(vUpgKeys) do local upg=state.voidUpgrades[vu[1]]; local cost=getCost(upg); labels[vu[2].."Info"].Text="Lv: "..upg.level; labels[vu[2].."Cost"].Text="Cost: "..formatNumber(cost).." Void"; labels[vu[3].."Bg"].Color=state.voidEnergy>=cost and Color3.fromRGB(130,40,200) or Color3.fromRGB(50,20,70) end
-    labels.vrStats.Text="Rebirths: "..state.voidRebirths.." | Mult: x"..formatNumber(voidRebirthMult()); labels.vrReq.Text="Need: "..formatNumber(voidRebirthCost()).." Void"; labels.vrBg.Color=state.voidEnergy>=voidRebirthCost() and Color3.fromRGB(150,40,220) or Color3.fromRGB(50,15,70)
-    labels.vpStats.Text="Prestige: "..state.voidPrestige.." | Mult: x"..formatNumber(voidPrestigeMult()); labels.vpReq.Text="Need: "..voidPrestigeCost().." Void Rebirths"; labels.vpBg.Color=state.voidRebirths>=voidPrestigeCost() and Color3.fromRGB(100,30,200) or Color3.fromRGB(30,10,60)
-    labels.astralShards.Text="Astral Shards: "..formatNumber(state.astralShards); labels.astralPerSec.Text="Shards/sec: "..formatNumber(effectiveAstralPerSec())
-    labels.omegaEnergy.Text="Omega Energy: "..formatNumber(state.omegaEnergy); labels.omegaPerSec.Text="Omega/sec: "..formatNumber(effectiveOmegaPerSec())
+    labels.vrStats.Text="Rebirths: "..state.voidRebirths.." | Mult: x"..formatNumber(voidRebirthMult())
+    labels.vrReq.Text="Need: "..formatNumber(voidRebirthCost()).." Void"
+    labels.vrBg.Color=state.voidEnergy>=voidRebirthCost() and Color3.fromRGB(150,40,220) or Color3.fromRGB(50,15,70)
+    labels.vpStats.Text="Prestige: "..state.voidPrestige.." | Mult: x"..formatNumber(voidPrestigeMult())
+    labels.vpReq.Text="Need: "..voidPrestigeCost().." Void Rebirths"
+    labels.vpBg.Color=state.voidRebirths>=voidPrestigeCost() and Color3.fromRGB(100,30,200) or Color3.fromRGB(30,10,60)
+    labels.astralShards.Text="Astral Shards: "..formatNumber(state.astralShards)
+    labels.astralPerSec.Text="Shards/sec: "..formatNumber(effectiveAstralPerSec())
+    labels.omegaEnergy.Text="Omega Energy: "..formatNumber(state.omegaEnergy)
+    labels.omegaPerSec.Text="Omega/sec: "..formatNumber(effectiveOmegaPerSec())
+    labels.woodCount.Text="Wood: "..formatNumber(state.wood)
+    labels.woodPerSec.Text="Wood/sec: "..formatNumber(effectiveWoodPerSec())
+    local wUpgKeys = {{"axe","wu_axe","wbuy_axe"},{"sawmill","wu_sawmill","wbuy_sawmill"},{"forest","wu_forest","wbuy_forest"},{"roots","wu_roots","wbuy_roots"},{"ironBark","wu_ironBark","wbuy_ironBark"}}
+    for _,wu in ipairs(wUpgKeys) do local upg=state.woodUpgrades[wu[1]]; local cost=getCost(upg); labels[wu[2].."Info"].Text="Lv: "..upg.level; labels[wu[2].."Cost"].Text="Cost: "..formatNumber(cost).." Wood"; labels[wu[3].."Bg"].Color=state.wood>=cost and Color3.fromRGB(160,110,30) or Color3.fromRGB(60,40,15) end
+    labels.wrStats.Text="Rebirths: "..state.woodRebirths.." | Mult: x"..formatNumber(woodRebirthMult())
+    labels.wrReq.Text="Need: "..formatNumber(woodRebirthCost()).." Wood"
+    labels.wrBg.Color=state.wood>=woodRebirthCost() and Color3.fromRGB(180,120,30) or Color3.fromRGB(60,40,15)
+    labels.wpStats.Text="Prestige: "..state.woodPrestige.." | Mult: x"..formatNumber(woodPrestigeMult())
+    labels.wpReq2.Text="Need: "..woodPrestigeCost().." Wood Rebirths"
+    labels.wpBg2.Color=state.woodRebirths>=woodPrestigeCost() and Color3.fromRGB(220,150,30) or Color3.fromRGB(60,40,10)
     if state.currentTab==7 and state.tier>=3 and astralBuilt then updateTreeColors(astralSkillTree,state.skillNodes,"a_","",state.astralShards) end
     if state.currentTab==8 and state.tier>=4 and omegaBuilt then updateTreeColors(omegaSkillTree,state.omegaNodes,"om_","omega",state.omegaEnergy) end
     if saveFileExists then labels.saveStatus.Text="Status: Save found";labels.saveStatus.Color=Color3.fromRGB(100,220,100) else labels.saveStatus.Text="Status: No save";labels.saveStatus.Color=Color3.fromRGB(180,180,100) end
-    local t=T(); for i=1,8 do labels["tab"..i.."Bg"].Color=(i==state.currentTab) and t.tabActive or t.tabInactive; labels["tab"..i.."L"].Color=(i==state.currentTab) and t.tabTextActive or t.tabTextInactive end
+    local t=T()
+    for i=1,TAB_COUNT do labels["tab"..i.."Bg"].Color=(i==state.currentTab) and t.tabActive or t.tabInactive; labels["tab"..i.."L"].Color=(i==state.currentTab) and t.tabTextActive or t.tabTextInactive end
     if state.tier>=4 then labels.tab8L.Color=(state.currentTab==8) and Color3.fromRGB(255,180,50) or Color3.fromRGB(200,120,30) end
+    if state.tier>=5 then labels.tab9L.Color=(state.currentTab==9) and Color3.fromRGB(220,170,60) or Color3.fromRGB(160,110,40) end
     if state.currentTab==4 then labels.essLocked.Visible=state.tier<1;labels.essLocked2.Visible=state.tier<1;labels.essLocked3.Visible=state.tier<1; for _,obj in ipairs(essObjs) do obj.Visible=state.tier>=1 end end
     if state.currentTab==6 then labels.voidLocked.Visible=state.tier<2;labels.voidLocked2.Visible=state.tier<2;labels.voidLocked3.Visible=state.tier<2; for _,obj in ipairs(voidObjs) do obj.Visible=state.tier>=2 end end
     if state.currentTab==7 then labels.astralLocked.Visible=state.tier<3;labels.astralLocked2.Visible=state.tier<3;labels.astralLocked3.Visible=state.tier<3 end
     if state.currentTab==8 then labels.omegaLocked.Visible=state.tier<4;labels.omegaLocked2.Visible=state.tier<4;labels.omegaLocked3.Visible=state.tier<4 end
+    if state.currentTab==9 then labels.woodLocked.Visible=state.tier<5;labels.woodLocked2.Visible=state.tier<5;labels.woodLocked3.Visible=state.tier<5; for _,obj in ipairs(woodObjs) do obj.Visible=state.tier>=5 end end
     for i=1,#themes do if labels["themeBg"..i] then labels["themeBg"..i].Color=(i==state.themeIndex) and Color3.fromRGB(80,80,160) or Color3.fromRGB(40,40,60) end end
 end
 
@@ -1190,14 +1515,17 @@ local function doRebirth() if state.coins<rebirthCost() then return end; state.r
 local function buyRebirthUpgrade(name) local cost=rebirthUpgCost(name);if state.rebirthTokens<cost then return end; state.rebirthTokens=state.rebirthTokens-cost;state.rebirthUpgrades[name].level=state.rebirthUpgrades[name].level+1;updateUI() end
 local function doPrestige() if state.rebirths<prestigeCost() then return end; state.prestige=state.prestige+1;state.coins=0;state.clickPower=1;state.clickMultiplier=1;state.autoUnlocked=false; state.rebirths=0;state.rebirthTokens=0;state.upgrades.click.level=0;state.upgrades.auto.level=0;state.upgrades.multi.level=0; state.rebirthUpgrades.startCoins.level=0;state.rebirthUpgrades.permClick.level=0;updateUI() end
 
-local function fullReset(keepTitle) local savedTitle=state.titleIndex; state.coins=0;state.clickPower=1;state.clickMultiplier=1;state.autoUnlocked=false; state.upgrades.click.level=0;state.upgrades.auto.level=0;state.upgrades.multi.level=0; state.rebirths=0;state.rebirthTokens=0;state.rebirthUpgrades.startCoins.level=0;state.rebirthUpgrades.permClick.level=0; state.prestige=0;state.essence=0;state.essenceRebirths=0;state.essencePrestige=0; state.essenceUpgrades.coinBoost.level=0;state.essenceUpgrades.essSpeed.level=0;state.essenceUpgrades.superClick.level=0; state.voidEnergy=0;state.voidRebirths=0;state.voidPrestige=0; state.voidUpgrades.voidClick.level=0;state.voidUpgrades.voidFlow.level=0;state.voidUpgrades.cosmicBoost.level=0;state.voidUpgrades.starDrain.level=0; state.astralShards=0;state.omegaEnergy=0; for _,n in ipairs(astralSkillTree) do state.skillNodes[n.id]=false end; for _,n in ipairs(omegaSkillTree) do state.omegaNodes[n.id]=false end; if keepTitle then state.titleIndex=savedTitle else state.titleIndex=1 end end
-local function doTier() if state.tier>=4 then return end; if not tierRequirementsMet() then return end; state.tier=state.tier+1; fullReset(true); if state.tier==1 then notify("x25 mult! Essence!","TIER 1!",5) elseif state.tier==2 then notify("x150 mult! Void!","TIER 2!",5) elseif state.tier==3 then notify("x10K mult! Astral!","TIER 3!",6) elseif state.tier==4 then notify("x1M mult! OMEGA!","TIER 4 - OMEGA!",7) end; switchTab(1);rebuildAstralTree();rebuildOmegaTree();updateUI() end
+local function fullReset(keepTitle) local savedTitle=state.titleIndex; state.coins=0;state.clickPower=1;state.clickMultiplier=1;state.autoUnlocked=false; state.upgrades.click.level=0;state.upgrades.auto.level=0;state.upgrades.multi.level=0; state.rebirths=0;state.rebirthTokens=0;state.rebirthUpgrades.startCoins.level=0;state.rebirthUpgrades.permClick.level=0; state.prestige=0;state.essence=0;state.essenceRebirths=0;state.essencePrestige=0; state.essenceUpgrades.coinBoost.level=0;state.essenceUpgrades.essSpeed.level=0;state.essenceUpgrades.superClick.level=0; state.voidEnergy=0;state.voidRebirths=0;state.voidPrestige=0; state.voidUpgrades.voidClick.level=0;state.voidUpgrades.voidFlow.level=0;state.voidUpgrades.cosmicBoost.level=0;state.voidUpgrades.starDrain.level=0; state.astralShards=0;state.omegaEnergy=0; state.wood=0;state.woodRebirths=0;state.woodPrestige=0; state.woodUpgrades.axe.level=0;state.woodUpgrades.sawmill.level=0;state.woodUpgrades.forest.level=0;state.woodUpgrades.roots.level=0;state.woodUpgrades.ironBark.level=0; for _,n in ipairs(astralSkillTree) do state.skillNodes[n.id]=false end; for _,n in ipairs(omegaSkillTree) do state.omegaNodes[n.id]=false end; if keepTitle then state.titleIndex=savedTitle else state.titleIndex=1 end end
+local function doTier() if state.tier>=5 then return end; if not tierRequirementsMet() then return end; state.tier=state.tier+1; fullReset(true); if state.tier==1 then notify("x25 mult! Essence!","TIER 1!",5) elseif state.tier==2 then notify("x150 mult! Void!","TIER 2!",5) elseif state.tier==3 then notify("x10K mult! Astral!","TIER 3!",6) elseif state.tier==4 then notify("x1M mult! OMEGA!","TIER 4 - OMEGA!",7) elseif state.tier==5 then notify("x100M mult! LUMBER!","TIER 5 - LUMBER!",7) end; switchTab(1);rebuildAstralTree();rebuildOmegaTree();updateUI() end
 local function buyEssUpgrade(name) local upg=state.essenceUpgrades[name];local cost=getCost(upg);if state.essence<cost then return end; state.essence=state.essence-cost;upg.level=upg.level+1;updateUI() end
 local function doEssRebirth() if state.essence<essRebirthCost() then return end;state.essenceRebirths=state.essenceRebirths+1;state.essence=0; state.essenceUpgrades.coinBoost.level=0;state.essenceUpgrades.essSpeed.level=0;state.essenceUpgrades.superClick.level=0;updateUI() end
 local function doEssPrestige() if state.essenceRebirths<essPrestigeCost() then return end;state.essencePrestige=state.essencePrestige+1;state.essence=0;state.essenceRebirths=0; state.essenceUpgrades.coinBoost.level=0;state.essenceUpgrades.essSpeed.level=0;state.essenceUpgrades.superClick.level=0;updateUI() end
 local function buyVoidUpgrade(name) local upg=state.voidUpgrades[name];local cost=getCost(upg);if state.voidEnergy<cost then return end;state.voidEnergy=state.voidEnergy-cost;upg.level=upg.level+1;updateUI() end
 local function doVoidRebirth() if state.voidEnergy<voidRebirthCost() then return end;state.voidRebirths=state.voidRebirths+1;state.voidEnergy=0; state.voidUpgrades.voidClick.level=0;state.voidUpgrades.voidFlow.level=0;state.voidUpgrades.cosmicBoost.level=0;state.voidUpgrades.starDrain.level=0;updateUI() end
 local function doVoidPrestige() if state.voidRebirths<voidPrestigeCost() then return end;state.voidPrestige=state.voidPrestige+1;state.voidEnergy=0;state.voidRebirths=0; state.voidUpgrades.voidClick.level=0;state.voidUpgrades.voidFlow.level=0;state.voidUpgrades.cosmicBoost.level=0;state.voidUpgrades.starDrain.level=0;updateUI() end
+local function buyWoodUpgrade(name) local upg=state.woodUpgrades[name];local cost=getCost(upg);if state.wood<cost then return end;state.wood=state.wood-cost;upg.level=upg.level+1;updateUI() end
+local function doWoodRebirth() if state.wood<woodRebirthCost() then return end;state.woodRebirths=state.woodRebirths+1;state.wood=0; state.woodUpgrades.axe.level=0;state.woodUpgrades.sawmill.level=0;state.woodUpgrades.forest.level=0;state.woodUpgrades.roots.level=0;state.woodUpgrades.ironBark.level=0;updateUI() end
+local function doWoodPrestige() if state.woodRebirths<woodPrestigeCost() then return end;state.woodPrestige=state.woodPrestige+1;state.wood=0;state.woodRebirths=0; state.woodUpgrades.axe.level=0;state.woodUpgrades.sawmill.level=0;state.woodUpgrades.forest.level=0;state.woodUpgrades.roots.level=0;state.woodUpgrades.ironBark.level=0;updateUI() end
 
 local function doRoulette() if state.rolling then return end; local rollCost=state.tier>=4 and (ROLL_COST*10) or ROLL_COST; if state.coins<rollCost then return end; state.coins=state.coins-rollCost;state.rolling=true;updateUI(); task.spawn(function() local rollCount=state.tier>=4 and 10 or 1; local bestIdx=state.titleIndex; local bestMult=titles[bestIdx].mult; for roll=1,rollCount do local fi=rollTitle(); local spins=(rollCount>1) and (8+math.random(3,6)) or (20+math.random(5,15)); local maxIdx=state.tier>=4 and #titles or (state.tier>=2 and #titles-3 or #titles-4); for i=1,spins do local idx=(i==spins) and fi or math.random(2,maxIdx); local t2=titles[idx]; labels.rollResult.Text=t2.name;labels.rollResult.Color=t2.color; labels.rollResultMult.Text="x"..t2.mult..(rollCount>1 and " (Roll "..roll.."/"..rollCount..")" or ""); labels.rollResultMult.Color=t2.color; task.wait(0.03+(i/spins)*0.15) end; if titles[fi].mult>bestMult then bestIdx=fi;bestMult=titles[fi].mult end; if rollCount>1 then local tt=titles[fi]; labels.rollResult.Text=tt.name;labels.rollResult.Color=tt.color; if titles[fi].mult>titles[state.titleIndex].mult then labels.rollResultMult.Text="NEW BEST: x"..tt.mult else labels.rollResultMult.Text="x"..tt.mult.." (keeping better)" end; if roll<rollCount then task.wait(0.3) end end end; if bestMult>titles[state.titleIndex].mult then state.titleIndex=bestIdx end; local won=titles[state.titleIndex]; labels.rollBoxBg.Color=Color3.fromRGB(25,25,45); labels.rollResult.Text=won.name;labels.rollResult.Color=won.color; labels.rollResultMult.Text="KEEPING: x"..won.mult.."!";labels.rollResultMult.Color=won.color; state.rolling=false;updateUI() end) end
 
@@ -1252,7 +1580,7 @@ task.spawn(function()
                     end
                     if not clickedNode then treeDragging=true; activeTreeTab=8; treeDragLastX=mx; treeDragLastY=my end
                 elseif not state.minimized then
-                    for i=1,8 do if hit(mx,my,btn["tab"..i]) then switchTab(i); if i==7 and not astralBuilt then rebuildAstralTree() end; if i==8 and not omegaBuilt then rebuildOmegaTree() end; updateUI(); break end end
+                    for i=1,TAB_COUNT do if hit(mx,my,btn["tab"..i]) then switchTab(i); if i==7 and not astralBuilt then rebuildAstralTree() end; if i==8 and not omegaBuilt then rebuildOmegaTree() end; updateUI(); break end end
                     if state.currentTab==1 then
                         if hit(mx,my,btn.click) then doClick() elseif hit(mx,my,btn.buy1) then buyUpgrade("click") elseif hit(mx,my,btn.max1) then buyMaxUpgrade("click") elseif hit(mx,my,btn.buy2) then buyUpgrade("auto") elseif hit(mx,my,btn.max2) then buyMaxUpgrade("auto") elseif hit(mx,my,btn.buy3) then buyUpgrade("multi") elseif hit(mx,my,btn.max3) then buyMaxUpgrade("multi") end
                     elseif state.currentTab==2 then
@@ -1265,6 +1593,8 @@ task.spawn(function()
                         for i=1,#themes do if btn["theme"..i] and hit(mx,my,btn["theme"..i]) then state.themeIndex=i;applyTheme();updateUI();break end end
                     elseif state.currentTab==6 and state.tier>=2 then
                         if hit(mx,my,btn.vbuy1) then buyVoidUpgrade("voidClick") elseif hit(mx,my,btn.vbuy2) then buyVoidUpgrade("voidFlow") elseif hit(mx,my,btn.vbuy3) then buyVoidUpgrade("cosmicBoost") elseif hit(mx,my,btn.vbuy4) then buyVoidUpgrade("starDrain") elseif hit(mx,my,btn.vreb) then doVoidRebirth() elseif hit(mx,my,btn.vpres) then doVoidPrestige() end
+                    elseif state.currentTab==9 and state.tier>=5 then
+                        if hit(mx,my,btn.wbuy_axe) then buyWoodUpgrade("axe") elseif hit(mx,my,btn.wbuy_sawmill) then buyWoodUpgrade("sawmill") elseif hit(mx,my,btn.wbuy_forest) then buyWoodUpgrade("forest") elseif hit(mx,my,btn.wbuy_roots) then buyWoodUpgrade("roots") elseif hit(mx,my,btn.wbuy_ironBark) then buyWoodUpgrade("ironBark") elseif hit(mx,my,btn.wreb) then doWoodRebirth() elseif hit(mx,my,btn.wpres2) then doWoodPrestige() end
                     end
                 end
             end
@@ -1314,9 +1644,15 @@ task.spawn(function()
 end)
 
 task.spawn(function() while state.running do if state.autoUnlocked then state.coins=state.coins+effectiveAutoClick();updateUI();task.wait(autoInterval()) else task.wait(0.5) end end end)
-task.spawn(function() while state.running do local u=false; if state.tier>=1 then state.essence=state.essence+effectiveEssPerSec();u=true end; if state.tier>=2 then state.voidEnergy=state.voidEnergy+effectiveVoidPerSec();u=true end; if state.tier>=3 then state.astralShards=state.astralShards+effectiveAstralPerSec();u=true end; if state.tier>=4 then state.omegaEnergy=state.omegaEnergy+effectiveOmegaPerSec();u=true end; if u then updateUI() end; task.wait(1) end end)
+task.spawn(function() while state.running do local u=false; if state.tier>=1 then state.essence=state.essence+effectiveEssPerSec();u=true end; if state.tier>=2 then state.voidEnergy=state.voidEnergy+effectiveVoidPerSec();u=true end; if state.tier>=3 then state.astralShards=state.astralShards+effectiveAstralPerSec();u=true end; if state.tier>=4 then state.omegaEnergy=state.omegaEnergy+effectiveOmegaPerSec();u=true end; if state.tier>=5 then state.wood=state.wood+effectiveWoodPerSec();u=true end; if u then updateUI() end; task.wait(1) end end)
 task.spawn(function() local pt=0; while state.running do if not state.minimized then pt=pt+0.05; local pulse=0.2+math.abs(math.sin(pt))*0.2; if state.currentTab==7 and state.tier>=3 then for _,node in ipairs(astralSkillTree) do if state.skillNodes[node.id] and labels["a_nodeGlow_"..node.id] then labels["a_nodeGlow_"..node.id].Transparency=pulse end end end; if state.currentTab==8 and state.tier>=4 then local op=0.25+math.abs(math.sin(pt*1.3))*0.25; for _,node in ipairs(omegaSkillTree) do if state.omegaNodes[node.id] and labels["om_nodeGlow_"..node.id] then labels["om_nodeGlow_"..node.id].Transparency=op end end end end; task.wait(0.05) end end)
 task.spawn(function() while state.running do task.wait(60); if state.running then saveGame() end end end)
 
-updateSaveStatus(); loadGame(); applyTheme(); rebuildAstralTree(); rebuildOmegaTree(); switchTab(1); updateUI()
+updateSaveStatus()
+loadGame()
+applyTheme()
+rebuildAstralTree()
+rebuildOmegaTree()
+switchTab(1)
+updateUI()
 notify("Loaded","Incremental Game v5",4)
